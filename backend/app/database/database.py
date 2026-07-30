@@ -2,7 +2,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 # Replace 'username' and 'password' with your MySQL credentials
-SQLALCHEMY_DATABASE_URL = "mysql+pymysql://username:password@localhost/dip"
+SQLALCHEMY_DATABASE_URL = "mysql+pymysql://root:admin@localhost/dip"
 
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
