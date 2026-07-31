@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.auth import router as auth_router
+import app.models.models  # Import all models to register with SQLAlchemy
 
 app = FastAPI(title="DeepGuard API")
 
@@ -13,7 +14,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth_router, prefix="/api")
+app.include_router(auth_router, prefix="/api/v1")
 
 @app.get("/")
 def root():

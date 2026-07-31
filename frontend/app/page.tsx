@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState, useEffect } from "react";
+import { useSession } from "next-auth/react";
 
 const stats = [
   { value: "99.2%", label: "Detection Accuracy" },
@@ -80,12 +81,23 @@ const steps = [
 export default function LandingPage() {
   const [scrolled, setScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { data: session, status } = useSession();
 
   useEffect(() => {
     const handler = () => setScrolled(window.scrollY > 20);
     window.addEventListener("scroll", handler);
     return () => window.removeEventListener("scroll", handler);
   }, []);
+
+  const getDestinationUrl = () => {
+    if (status === "authenticated" && session?.user) {
+      if (session.user.email === "superuser@example.com") {
+        return "/admin";
+      }
+      return "/dashboard";
+    }
+    return "/login";
+  };
 
   return (
     <div className="min-h-screen bg-[#fafafa] text-[#0a0a0a]" style={{ fontFamily: "Inter, system-ui, sans-serif" }}>
@@ -116,11 +128,8 @@ export default function LandingPage() {
           </div>
 
           <div className="hidden md:flex items-center gap-3">
-            <Link href="/login" className="text-sm font-medium px-4 py-2 rounded hover:bg-black/5 transition-colors">
-              Sign in
-            </Link>
             <Link
-              href="/login"
+              href={getDestinationUrl()}
               className="btn-primary text-sm font-semibold px-5 py-2.5 rounded bg-[#CC2200] text-white hover:opacity-90 transition-opacity"
             >
               Get started
@@ -147,8 +156,7 @@ export default function LandingPage() {
               </a>
             ))}
             <div className="flex gap-3 pt-2">
-              <Link href="/login" className="flex-1 text-center text-sm font-medium py-2.5 border border-[#e5e5e5] rounded">Sign in</Link>
-              <Link href="/login" className="flex-1 text-center text-sm font-semibold py-2.5 bg-[#CC2200] text-white rounded">Get started</Link>
+              <Link href={getDestinationUrl()} className="flex-1 text-center text-sm font-semibold py-2.5 bg-[#CC2200] text-white rounded">Get started</Link>
             </div>
           </div>
         )}
@@ -157,12 +165,6 @@ export default function LandingPage() {
       {/* ─── Hero ─── */}
       <section className="pt-32 pb-24 px-6 max-w-6xl mx-auto">
         <div className="max-w-3xl">
-          {/* Badge */}
-          <div className="anim-fade-up d-0 inline-flex items-center gap-2 mb-6 px-3 py-1.5 rounded-full border border-[#e5e5e5] bg-white text-xs font-medium text-[#0a0a0a]/60">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse inline-block" />
-            Trusted by 500+ law enforcement agencies worldwide
-          </div>
-
           <h1 className="anim-fade-up d-50 text-5xl md:text-6xl font-bold leading-[1.05] tracking-tight mb-6">
             Expose deepfakes.{" "}
             <span className="shimmer-text">Protect truth.</span>
@@ -174,7 +176,7 @@ export default function LandingPage() {
 
           <div className="anim-fade-up d-150 flex flex-col sm:flex-row gap-3">
             <Link
-              href="/login"
+              href={getDestinationUrl()}
               className="btn-primary inline-flex items-center justify-center gap-2 px-7 py-3.5 bg-[#CC2200] text-white font-semibold rounded text-sm hover:opacity-90 active:scale-[0.97] transition-all"
             >
               Start free investigation
@@ -338,7 +340,7 @@ export default function LandingPage() {
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <Link
-              href="/login"
+              href={getDestinationUrl()}
               className="btn-primary inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-[#CC2200] text-white font-semibold rounded text-sm hover:opacity-90 transition-all active:scale-[0.97]"
             >
               Start free — no credit card
