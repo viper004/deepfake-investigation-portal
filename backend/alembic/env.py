@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from alembic import context
 from app.database.database import Base, SQLALCHEMY_DATABASE_URL
 from app.models.user import User
-
+from app.models.models import Role, InvestigationCase, EvidenceFile, MediaMetadata, AIModel, AIAnalysis, ForensicReview, InvestigationNote, Report
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
@@ -20,7 +20,7 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", SQLALCHEMY_DATABASE_URL)
+config.set_main_option("sqlalchemy.url", SQLALCHEMY_DATABASE_URL.replace('%', '%%'))
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
