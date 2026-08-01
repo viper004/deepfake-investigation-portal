@@ -38,10 +38,6 @@ export default function LoginPage() {
       const data = await res.json();
       
       if (!res.ok) {
-        if (res.status === 403 && data.detail === "Account pending approval") {
-          router.push("/awaiting-approval");
-          return;
-        }
         setError(data.detail || "Authentication failed");
         setLoading(false);
         return;
@@ -166,13 +162,21 @@ export default function LoginPage() {
           </form>
 
           <div className="mt-8 text-center text-sm font-medium text-[#0a0a0a]/60">
-            New investigator?{" "}
-            <Link
-              href="/register"
-              className="text-[#CC2200] font-semibold hover:text-[#CC2200]/80 transition-colors"
-            >
-              Request account access &rarr;
-            </Link>
+            <p className="mb-4 text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/40">Don't have an account?</p>
+            <div className="flex flex-col gap-2.5">
+              <Link
+                href="/register?flow=user"
+                className="w-full inline-flex justify-center items-center py-2.5 px-4 border border-[#e5e5e5] rounded-md shadow-sm text-sm font-bold text-[#0a0a0a]/80 bg-white hover:bg-slate-50 transition-colors"
+              >
+                Register as User
+              </Link>
+              <Link
+                href="/register?flow=investigator"
+                className="w-full inline-flex justify-center items-center py-2.5 px-4 border border-[#CC2200]/10 rounded-md shadow-sm text-sm font-bold text-[#CC2200] bg-[#CC2200]/5 hover:bg-[#CC2200]/10 transition-colors"
+              >
+                Apply as Investigator
+              </Link>
+            </div>
           </div>
         </div>
       </div>

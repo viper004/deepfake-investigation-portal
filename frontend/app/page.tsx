@@ -90,8 +90,9 @@ export default function LandingPage() {
   }, []);
 
   const getDestinationUrl = () => {
-    if (status === "authenticated" && session?.user) {
-      if (session.user.email === "superuser@example.com") {
+    const s = session as any;
+    if (status === "authenticated" && s?.user) {
+      if (s.user.role === 1 || s.user.email === "superuser@example.com") {
         return "/admin";
       }
       return "/dashboard";

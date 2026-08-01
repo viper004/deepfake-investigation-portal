@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from app.models.user import User, UserStatus
+from app.models.user import User
 from app.schemas.user import UserCreate
 from app.utils.auth import get_password_hash
 
@@ -14,7 +14,7 @@ def create_user(db: Session, user: UserCreate):
         password=hashed_password,
         phone=user.phone,
         organization=user.organization,
-        status=UserStatus.PENDING
+        status="PENDING"
     )
     db.add(db_user)
     db.commit()
