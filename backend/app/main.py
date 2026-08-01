@@ -1,7 +1,216 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.auth import router as auth_router
+from app.api.admin import router as admin_router
 import app.models.models  # Import all models to register with SQLAlchemy
+from sqlalchemy import text
+from app.database.database import SessionLocal
+
+# Database updates on startup
+def init_db_updates():
+    db = SessionLocal()
+    try:
+        # Check if government_id column exists
+        res = db.execute(text("SHOW COLUMNS FROM users LIKE 'government_id'")).fetchone()
+        if not res:
+            db.execute(text("ALTER TABLE users ADD COLUMN government_id VARCHAR(100) NULL"))
+        
+        # Modify status column to VARCHAR(50)
+        db.execute(text("ALTER TABLE users MODIFY COLUMN status VARCHAR(50) NOT NULL DEFAULT 'PENDING'"))
+        
+        # Create notifications table if not exists
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                title VARCHAR(200) NOT NULL,
+                message TEXT NOT NULL,
+                `read` TINYINT(1) DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB;
+        """))
+
+        # Create investigator_profiles table if not exists
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS investigator_profiles (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                organization VARCHAR(100) NULL,
+                department VARCHAR(100) NULL,
+                designation VARCHAR(100) NULL,
+                employee_id VARCHAR(100) NULL,
+                government_id_path VARCHAR(255) NULL,
+                rejection_reason VARCHAR(500) NULL,
+                applied_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY unique_user (user_id),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB;
+        """))
+        db.commit()
+    except Exception as e:
+        print("Database migration/update error:", e)
+        db.rollback()
+    finally:
+        db.close()
+
+def seed_roles_and_users():
+    db = SessionLocal()
+    try:
+        from app.models.models import Role
+        from app.models.user import User
+        from app.utils.auth import get_password_hash
+        
+        # Seed Roles
+        roles_to_seed = [
+            {"id": 1, "role_name": "ADMIN", "description": "System Administrator"},
+            {"id": 2, "role_name": "INVESTIGATOR", "description": "Lead Case Investigator"},
+            {"id": 3, "role_name": "USER", "description": "Portal End User"}
+        ]
+        for r_data in roles_to_seed:
+            existing_role = db.query(Role).filter(Role.id == r_data["id"]).first()
+            if not existing_role:
+                role = Role(id=r_data["id"], role_name=r_data["role_name"], description=r_data["description"])
+                db.add(role)
+            else:
+                existing_role.role_name = r_data["role_name"]
+                existing_role.description = r_data["description"]
+        db.commit()
+
+        # Seed Users if table is empty or only has the superuser
+        total_users = db.query(User).count()
+        if total_users <= 1:
+            users_to_seed = [
+                {
+                    "full_name": "Alexander Pierce",
+                    "email": "alexander.pierce@deepguard.gov",
+                    "password": get_password_hash("password123"),
+                    "phone": "+1 (555) 234-5678",
+                    "organization": "Department of Homeland Security",
+                    "role_id": 2,
+                    "status": "ACTIVE",
+                    "profile_picture": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150",
+                    "government_id": "GOV-DHS-88291"
+                },
+                {
+                    "full_name": "Jane Cooper",
+                    "email": "jane.cooper@fbi.gov",
+                    "password": get_password_hash("password123"),
+                    "phone": "+1 (555) 345-6789",
+                    "organization": "Federal Bureau of Investigation",
+                    "role_id": 3,
+                    "status": "APPROVED",
+                    "profile_picture": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150",
+                    "government_id": "GOV-FBI-99102"
+                },
+                {
+                    "full_name": "Cody Fisher",
+                    "email": "cody.fisher@nypd.org",
+                    "password": get_password_hash("password123"),
+                    "phone": "+1 (555) 456-7890",
+                    "organization": "New York Police Department",
+                    "role_id": 2,
+                    "status": "INACTIVE",
+                    "profile_picture": "https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=150",
+                    "government_id": "GOV-NYPD-7721"
+                },
+                {
+                    "full_name": "Esther Howard",
+                    "email": "esther.howard@interpol.int",
+                    "password": get_password_hash("password123"),
+                    "phone": "+1 (555) 567-8901",
+                    "organization": "Interpol Cyber Crime Division",
+                    "role_id": 1,
+                    "status": "BLOCKED",
+                    "profile_picture": "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=150",
+                    "government_id": "GOV-INT-55123"
+                },
+                {
+                    "full_name": "Marcus Aurelius",
+                    "email": "marcus.aurelius@senate.gov",
+                    "password": get_password_hash("password123"),
+                    "phone": "+1 (555) 678-9012",
+                    "organization": "US Senate Intelligence Committee",
+                    "role_id": 2,
+                    "status": "PENDING",
+                    "profile_picture": "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150",
+                    "government_id": "GOV-SEN-11002"
+                },
+                {
+                    "full_name": "Sarah Connor",
+                    "email": "sarah.connor@cyberdyne.org",
+                    "password": get_password_hash("password123"),
+                    "phone": "+1 (555) 789-0123",
+                    "organization": "Cyberdyne Security Systems",
+                    "role_id": 3,
+                    "status": "PENDING",
+                    "profile_picture": "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150",
+                    "government_id": "GOV-CYB-00812"
+                }
+            ]
+            for u_data in users_to_seed:
+                db_user = User(
+                    full_name=u_data["full_name"],
+                    email=u_data["email"],
+                    password=u_data["password"],
+                    phone=u_data["phone"],
+                    organization=u_data["organization"],
+                    role_id=u_data["role_id"],
+                    status=u_data["status"],
+                    profile_picture=u_data["profile_picture"],
+                    government_id=u_data["government_id"]
+                )
+                db.add(db_user)
+            db.commit()
+    except Exception as e:
+        print("Database seeding error:", e)
+        db.rollback()
+    finally:
+        db.close()
+
+def seed_ai_models():
+    db = SessionLocal()
+    try:
+        from app.models.models import AIModel, MediaTypeEnum
+        if db.query(AIModel).count() == 0:
+            models = [
+                AIModel(
+                    model_name="DeepFakeVision V4",
+                    version="4.2.1",
+                    media_type=MediaTypeEnum.VIDEO,
+                    accuracy=99.2,
+                    description="Facial manipulation detection for high-definition video feeds.",
+                    status=True
+                ),
+                AIModel(
+                    model_name="FaceConsistency AI",
+                    version="1.0.5",
+                    media_type=MediaTypeEnum.IMAGE,
+                    accuracy=98.7,
+                    description="Analyzes facial features consistency, lighting patterns, and shadows in images.",
+                    status=True
+                ),
+                AIModel(
+                    model_name="VoiceGuard Synthetic",
+                    version="2.1.0",
+                    media_type=MediaTypeEnum.AUDIO,
+                    accuracy=97.9,
+                    description="Voice cloning and synthetic audio detection.",
+                    status=True
+                )
+            ]
+            db.add_all(models)
+            db.commit()
+    except Exception as e:
+        print("Database AI models seeding error:", e)
+        db.rollback()
+    finally:
+        db.close()
+
+# Run database configuration updates and seed initial roles/users/models
+init_db_updates()
+seed_roles_and_users()
+seed_ai_models()
 
 app = FastAPI(title="DeepGuard API")
 
@@ -14,7 +223,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from app.api.user import router as user_router
+
 app.include_router(auth_router, prefix="/api/v1")
+app.include_router(admin_router, prefix="/api")
+app.include_router(admin_router, prefix="/api/v1")
+app.include_router(user_router, prefix="/api")
+app.include_router(user_router, prefix="/api/v1")
 
 @app.get("/")
 def root():

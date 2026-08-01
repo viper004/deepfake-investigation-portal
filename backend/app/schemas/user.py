@@ -1,7 +1,6 @@
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from datetime import datetime
-from app.models.user import UserStatus
 
 class UserBase(BaseModel):
     full_name: str
@@ -20,7 +19,7 @@ class UserLogin(BaseModel):
 class UserResponse(UserBase):
     id: int
     role_id: Optional[int] = None
-    status: UserStatus
+    status: str
     last_login: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
