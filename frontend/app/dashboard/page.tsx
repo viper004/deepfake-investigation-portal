@@ -35,7 +35,11 @@ import {
   FileUp,
   ExternalLink,
   ChevronDown,
-  Notebook
+  Notebook,
+  Play,
+  RotateCcw,
+  CheckCircle,
+  Info
 } from "lucide-react";
 import WorkspaceSwitcher from "@/components/WorkspaceSwitcher";
 
