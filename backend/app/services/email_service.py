@@ -2,6 +2,9 @@ import os
 from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
 from pydantic import EmailStr
 from dotenv import load_dotenv
+from datetime import datetime, timezone
+from app.database.database import SessionLocal
+from app.models.user import InvestigatorInvitation, InvitationLog
 
 load_dotenv()
 
@@ -20,9 +23,9 @@ conf = ConnectionConfig(
 
 fm = FastMail(conf)
 
-async def send_investigator_invitation_email(email: EmailStr, full_name: str, token: str):
+async def send_investigator_invitation_email(email: EmailStr, full_name: str, token: str, invitation_id: int):
     """
-    Sends an invitation email to a new investigator.
+    Sends an invitation email to a new investigator and logs it in the database.
     """
     registration_link = f"http://localhost:3000/register?token={token}"
     
@@ -52,5 +55,41 @@ async def send_investigator_invitation_email(email: EmailStr, full_name: str, to
     try:
         await fm.send_message(message)
         print(f"[Email Service] Successfully sent invitation to {email}")
+        
+        # Log success to DB
+        with SessionLocal() as db:
+            inv = db.query(InvestigatorInvitation).filter_by(id=invitation_id).first()
+            if inv:
+                inv.delivery_status = "Delivered"
+                inv.send_attempts += 1
+                inv.last_attempt_at = datetime.now(timezone.utc)
+                
+                log = InvitationLog(
+                    invitation_id=inv.id,
+                    event_type="Email Sent",
+                    status="SUCCESS",
+                    recipient_email=email,
+                    message="Invitation email successfully delivered."
+                )
+                db.add(log)
+                db.commit()
     except Exception as e:
         print(f"[Email Service] Failed to send email to {email}: {str(e)}")
+        
+        # Log failure to DB
+        with SessionLocal() as db:
+            inv = db.query(InvestigatorInvitation).filter_by(id=invitation_id).first()
+            if inv:
+                inv.delivery_status = "Failed"
+                inv.send_attempts += 1
+                inv.last_attempt_at = datetime.now(timezone.utc)
+                
+                log = InvitationLog(
+                    invitation_id=inv.id,
+                    event_type="Email Failed",
+                    status="FAILED",
+                    recipient_email=email,
+                    message=f"Delivery failed: {str(e)[:450]}"
+                )
+                db.add(log)
+                db.commit()

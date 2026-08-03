@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from app.database.database import SessionLocal
-from app.models.user import User, InvestigatorInvitation, AccountRole
+from app.models.user import User, InvestigatorInvitation, AccountRole, InvitationLog
 from app.models.models import Role
 from app.schemas.user import UserResponse
 from app.utils.auth import SECRET_KEY, ALGORITHM
@@ -106,13 +106,28 @@ def create_invitations(req: BulkInvitationRequest, background_tasks: BackgroundT
             email=inv.email,
             phone=inv.phone,
             token=token,
-            status="PENDING",
+            status="Pending",
+            invitation_type="New Investigator",
+            delivery_status="Pending",
+            send_attempts=0,
             expires_at=datetime.now(timezone.utc) + timedelta(days=7),
             created_by=created_by_id
         )
         db.add(invite)
+        db.flush() # To get invite.id
+        
+        log = InvitationLog(
+            invitation_id=invite.id,
+            event_type="Invitation Created",
+            status="SUCCESS",
+            performed_by=created_by_id,
+            recipient_email=inv.email,
+            message="Initial invitation record created."
+        )
+        db.add(log)
+        
         sent_count += 1
-        background_tasks.add_task(send_investigator_invitation_email, inv.email, inv.full_name, token)
+        background_tasks.add_task(send_investigator_invitation_email, inv.email, inv.full_name, token, invite.id)
         
     db.commit()
     
@@ -135,6 +150,78 @@ def list_invitations(db: Session = Depends(get_db), admin: dict = Depends(get_cu
         "created_at": i.created_at,
         "expires_at": i.expires_at
     } for i in invites]
+
+@router.get("/invitation-logs")
+def list_invitation_logs(db: Session = Depends(get_db), admin: dict = Depends(get_current_admin)):
+    logs = db.query(InvitationLog).order_by(desc(InvitationLog.created_at)).all()
+    return [{
+        "id": l.id,
+        "invitation_id": l.invitation_id,
+        "event_type": l.event_type,
+        "status": l.status,
+        "performed_by": l.performed_by,
+        "recipient_email": l.recipient_email,
+        "message": l.message,
+        "ip_address": l.ip_address,
+        "user_agent": l.user_agent,
+        "created_at": l.created_at
+    } for l in logs]
+
+@router.post("/invitations/{invite_id}/resend")
+def resend_invitation(invite_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db), admin: dict = Depends(get_current_admin)):
+    admin_sub = admin.get("sub")
+    created_by_id = int(admin_sub) if admin_sub and str(admin_sub).isdigit() else None
+    
+    invite = db.query(InvestigatorInvitation).filter_by(id=invite_id).first()
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invitation not found")
+        
+    if invite.status not in ["Pending", "Expired", "Delivered", "Failed"]:
+        raise HTTPException(status_code=400, detail="Cannot resend an invitation in this status")
+        
+    invite.expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    invite.status = "Pending"
+    invite.delivery_status = "Pending"
+    
+    log = InvitationLog(
+        invitation_id=invite.id,
+        event_type="Invitation Resent",
+        status="SUCCESS",
+        performed_by=created_by_id,
+        recipient_email=invite.email,
+        message="Invitation expiration extended and email resent."
+    )
+    db.add(log)
+    db.commit()
+    
+    background_tasks.add_task(send_investigator_invitation_email, invite.email, invite.full_name, invite.token, invite.id)
+    return {"message": "Invitation resent"}
+
+@router.post("/invitations/{invite_id}/cancel")
+def cancel_invitation(invite_id: int, db: Session = Depends(get_db), admin: dict = Depends(get_current_admin)):
+    admin_sub = admin.get("sub")
+    created_by_id = int(admin_sub) if admin_sub and str(admin_sub).isdigit() else None
+    
+    invite = db.query(InvestigatorInvitation).filter_by(id=invite_id).first()
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invitation not found")
+        
+    if invite.status != "Pending" and invite.status != "Delivered" and invite.status != "Failed":
+        raise HTTPException(status_code=400, detail="Cannot cancel an invitation that is already accepted or expired")
+        
+    invite.status = "Cancelled"
+    
+    log = InvitationLog(
+        invitation_id=invite.id,
+        event_type="Invitation Cancelled",
+        status="SUCCESS",
+        performed_by=created_by_id,
+        recipient_email=invite.email,
+        message="Invitation was cancelled by administrator."
+    )
+    db.add(log)
+    db.commit()
+    return {"message": "Invitation cancelled"}
 
 @router.post("/users/{account_id}/upgrade-investigator")
 def upgrade_user(account_id: int, db: Session = Depends(get_db), admin: dict = Depends(get_current_admin)):
@@ -361,78 +448,4 @@ def notify_user(db: Session, user_id: int, title: str, message: str):
     except Exception as e:
         print("Failed to send notification:", e)
 
-
-@router.get("/investigator-applications")
-def list_investigator_applications(
-    db: Session = Depends(get_db),
-    admin: dict = Depends(get_current_admin)
-):
-    from app.models.user import InvestigatorProfile
-    applications = db.query(User).join(InvestigatorProfile, User.id == InvestigatorProfile.user_id).filter(
-        User.role_id == 2,
-        User.status == "PENDING"
-    ).order_by(desc(User.created_at)).all()
-
-    result = []
-    for u in applications:
-        prof = u.investigator_profile
-        result.append({
-            "id": u.id,
-            "full_name": u.full_name,
-            "email": u.email,
-            "phone": u.phone,
-            "profile_picture": u.profile_picture,
-            "status": u.status,
-            "created_at": u.created_at.isoformat() if u.created_at else None,
-            "organization": prof.organization if prof else None,
-            "department": prof.department if prof else None,
-            "designation": prof.designation if prof else None,
-            "employee_id": prof.employee_id if prof else None,
-            "government_id_path": prof.government_id_path if prof else None,
-            "applied_date": prof.applied_date.isoformat() if prof and prof.applied_date else None
-        })
-    return result
-
-
-@router.post("/investigator-applications/{user_id}/approve")
-def approve_investigator_application(
-    user_id: int,
-    db: Session = Depends(get_db),
-    admin: dict = Depends(get_current_admin)
-):
-    user = db.query(User).filter(User.id == user_id, User.role_id == 2).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="Investigator application not found")
-    
-    user.status = "ACTIVE"
-    db.commit()
-
-    notify_user(
-        db, user_id, "Application Approved",
-        "Your investigator application has been approved by the administrator. You can now log in."
-    )
-    return {"message": "Application approved successfully"}
-
-
-@router.post("/investigator-applications/{user_id}/reject")
-def reject_investigator_application(
-    user_id: int,
-    payload: RejectionPayload,
-    db: Session = Depends(get_db),
-    admin: dict = Depends(get_current_admin)
-):
-    user = db.query(User).filter(User.id == user_id, User.role_id == 2).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="Investigator application not found")
-    
-    user.status = "REJECTED"
-    if user.investigator_profile:
-        user.investigator_profile.rejection_reason = payload.reason
-    db.commit()
-
-    notify_user(
-        db, user_id, "Application Rejected",
-        f"Your investigator application was rejected. Reason: {payload.reason}"
-    )
-    return {"message": "Application rejected successfully"}
 

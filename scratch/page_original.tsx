@@ -47,10 +47,6 @@ interface UserType {
   status: string;
   profile_picture: string | null;
   government_id: string | null;
-  date_of_birth?: string | null;
-  gender?: string | null;
-  address?: string | null;
-  digital_id_path?: string | null;
   last_login: string | null;
   created_at: string | null;
 }
@@ -76,7 +72,11 @@ export default function AdminDashboard() {
   // Sidebar Tab State (Overview vs User Management vs Investigators)
   const [activeSidebarTab, setActiveSidebarTab] = useState<"Overview" | "User Management" | "Investigators" | "System Alerts" | "Audit Logs" | "Configuration">("Overview");
 
-
+  // Investigator Applications State
+  const [applications, setApplications] = useState<any[]>([]);
+  const [applicationsLoading, setApplicationsLoading] = useState(true);
+  const [applicationsLoaded, setApplicationsLoaded] = useState(false);
+  
   // Investigators Management State
   const [investigators, setInvestigators] = useState<any[]>([]);
   const [investigatorsTotal, setInvestigatorsTotal] = useState(0);
@@ -89,85 +89,19 @@ export default function AdminDashboard() {
   const [investigatorsStatusFilter, setInvestigatorsStatusFilter] = useState("");
   const [investigatorsSort, setInvestigatorsSort] = useState("name");
   
-
-  const [investigatorsTab, setInvestigatorsTab] = useState<"Active Investigators" | "Pending Invitations" | "Pending Verification" | "Invitation Logs">("Active Investigators");
-  const [invitationLogs, setInvitationLogs] = useState<any[]>([]);
-  const [invitationLogsLoading, setInvitationLogsLoading] = useState(false);
-  const [invitationLogsLoaded, setInvitationLogsLoaded] = useState(false);
-  const [selectedLogs, setSelectedLogs] = useState<number[]>([]);
-  const [isLogDrawerOpen, setIsLogDrawerOpen] = useState(false);
-  const [selectedLog, setSelectedLog] = useState<any | null>(null);
-  
-  const handleSelectLog = (id: number) => {
-    setSelectedLogs(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-  };
-  
-  const handleSelectAllLogs = () => {
-    if (selectedLogs.length === invitationLogs.length) {
-      setSelectedLogs([]);
-    } else {
-      setSelectedLogs(invitationLogs.map(l => l.id));
-    }
-  };
-  
-  const handleExportCSV = () => {
-    const csvHeader = "ID,Event Type,Status,Recipient,Performed By,IP Address,Created At\n";
-    const csvContent = invitationLogs.map(l => `${l.id},${l.event_type},${l.status},${l.recipient_email},${l.performed_by || "System"},${l.ip_address || "N/A"},${l.created_at}`).join("\n");
-    const blob = new Blob([csvHeader + csvContent], { type: "text/csv" });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "invitation_logs.csv";
-    a.click();
-  };
-  
-  const handleResendSelected = async () => {
-    if (selectedLogs.length === 0) return;
-    try {
-      const selectedInvitationIds = Array.from(new Set(
-        invitationLogs.filter(l => selectedLogs.includes(l.id)).map(l => l.invitation_id)
-      ));
-      for (const id of selectedInvitationIds) {
-        await fetch(`http://127.0.0.1:8000/api/admin/invitations/${id}/resend`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${session.accessToken}` }
-        });
-      }
-      showToast("Selected invitations resent successfully.", "success");
-      fetchInvitationLogs(true);
-      fetchInvitations(true);
-      setSelectedLogs([]);
-    } catch(err) {
-      showToast("Failed to resend some invitations.", "error");
-    }
-  };
-
-  const handleCancelSelected = async () => {
-    if (selectedLogs.length === 0) return;
-    try {
-      const selectedInvitationIds = Array.from(new Set(
-        invitationLogs.filter(l => selectedLogs.includes(l.id)).map(l => l.invitation_id)
-      ));
-      for (const id of selectedInvitationIds) {
-        await fetch(`http://127.0.0.1:8000/api/admin/invitations/${id}/cancel`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${session.accessToken}` }
-        });
-      }
-      showToast("Selected invitations cancelled successfully.", "success");
-      fetchInvitationLogs(true);
-      fetchInvitations(true);
-      setSelectedLogs([]);
-    } catch(err) {
-      showToast("Failed to cancel some invitations.", "error");
-    }
-  };
-
+  const [isPendingSectionOpen, setIsPendingSectionOpen] = useState(false);
   const [bulkRows, setBulkRows] = useState(Array.from({ length: 5 }, createEmptyRow));
   const [isBulkInviteModalOpen, setIsBulkInviteModalOpen] = useState(false);
   const [bulkInviteResult, setBulkInviteResult] = useState<any>(null);
+  const [selectedApplication, setSelectedApplication] = useState<any | null>(null);
+  const [isAppViewDrawerOpen, setIsAppViewDrawerOpen] = useState(false);
   
+  const [appToApprove, setAppToApprove] = useState<any | null>(null);
+  const [isAppApproveModalOpen, setIsAppApproveModalOpen] = useState(false);
 
+  const [appToReject, setAppToReject] = useState<any | null>(null);
+  const [isAppRejectModalOpen, setIsAppRejectModalOpen] = useState(false);
+  const [appRejectReason, setAppRejectReason] = useState("");
 
   // User Management Sub-Tabs (Active Users vs Pending Requests)
   const [adminTab, setAdminTab] = useState<"active" | "pending" | "invitations">("active");
@@ -378,27 +312,29 @@ export default function AdminDashboard() {
     }
   }, [session?.accessToken, investigatorsPage, investigatorsSearch, investigatorsStatusFilter, investigatorsSort, investigatorsLoaded, showToast]);
 
-
-  const fetchInvitationLogs = useCallback(async (force = false) => {
+  // Fetch Investigator Applications
+  const fetchApplications = useCallback(async (force = false) => {
     if (!session?.accessToken) return;
-    if (invitationLogsLoaded && !force) return;
+    if (applicationsLoaded && !force) return;
     try {
-      setInvitationLogsLoading(true);
-      const res = await fetch(`http://127.0.0.1:8000/api/admin/invitation-logs`, {
-        headers: { Authorization: `Bearer ${session.accessToken}` }
+      setApplicationsLoading(true);
+      const res = await fetch(`${BACKEND_URL}/api/admin/investigator-applications`, {
+        headers: {
+          Authorization: `Bearer ${session.accessToken}`
+        }
       });
       if (res.ok) {
         const data = await res.json();
-        setInvitationLogs(data);
-        setInvitationLogsLoaded(true);
+        setApplications(data);
+        setApplicationsLoaded(true);
       }
     } catch (err) {
-      console.error(err);
-      showToast("Error fetching invitation logs.", "error");
+      console.error("Failed to fetch investigator applications:", err);
+      showToast("Error fetching investigator applications.", "error");
     } finally {
-      setInvitationLogsLoading(false);
+      setApplicationsLoading(false);
     }
-  }, [session?.accessToken, invitationLogsLoaded, showToast]);
+  }, [session?.accessToken, applicationsLoaded, showToast]);
 
   // Fetch Invitations
   const fetchInvitations = useCallback(async (force = false) => {
@@ -427,8 +363,9 @@ export default function AdminDashboard() {
     fetchStats();
     fetchUsers(true);
     fetchPendingUsers(true);
-        fetchInvitations(true);
-  }, [fetchStats, fetchUsers, fetchPendingUsers, fetchInvitations]);
+    fetchApplications(true);
+    fetchInvitations(true);
+  }, [fetchStats, fetchUsers, fetchPendingUsers, fetchApplications, fetchInvitations]);
 
   // Initial Fetches (Always load stats and active users initially)
   useEffect(() => {
@@ -449,12 +386,12 @@ export default function AdminDashboard() {
         fetchPendingUsers();
       } else if (adminTab === "invitations" && !invitationsLoaded) {
         fetchInvitations();
-    fetchInvitationLogs();
       }
-    } else if (activeSidebarTab === "Investigators" && !investigatorsLoaded) {
-            fetchInvestigators();
+    } else if (activeSidebarTab === "Investigators" && (!applicationsLoaded || !investigatorsLoaded)) {
+      fetchApplications();
+      fetchInvestigators();
     }
-  }, [adminTab, activeSidebarTab, activeUsersLoaded, pendingUsersLoaded, invitationsLoaded, investigatorsLoaded, session?.accessToken, fetchUsers, fetchPendingUsers, fetchInvitations, fetchInvestigators]);
+  }, [adminTab, activeSidebarTab, activeUsersLoaded, pendingUsersLoaded, invitationsLoaded, applicationsLoaded, investigatorsLoaded, session?.accessToken, fetchUsers, fetchPendingUsers, fetchApplications, fetchInvitations, fetchInvestigators]);
 
   // Refetch active users when active tab filters/pagination parameters change
   useEffect(() => {
@@ -516,7 +453,65 @@ export default function AdminDashboard() {
     }
   };
 
+  // Action - Approve Investigator Application
+  const handleAppApproveConfirm = async () => {
+    if (!appToApprove || !session?.accessToken) return;
+    try {
+      setIsSubmitting(true);
+      const res = await fetch(`${BACKEND_URL}/api/admin/investigator-applications/${appToApprove.id}/approve`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.accessToken}`
+        }
+      });
+      if (res.ok) {
+        showToast("Investigator application approved successfully", "success");
+        setIsAppApproveModalOpen(false);
+        setAppToApprove(null);
+        fetchApplications(true);
+        fetchStats(); // Update stats
+      } else {
+        const errData = await res.json();
+        showToast(errData.detail || "Approval failed", "error");
+      }
+    } catch (e) {
+      showToast("An unexpected error occurred", "error");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
+  // Action - Reject Investigator Application
+  const handleAppRejectConfirm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!appToReject || !appRejectReason.trim() || !session?.accessToken) return;
+    try {
+      setIsSubmitting(true);
+      const res = await fetch(`${BACKEND_URL}/api/admin/investigator-applications/${appToReject.id}/reject`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.accessToken}`
+        },
+        body: JSON.stringify({ reason: appRejectReason })
+      });
+      if (res.ok) {
+        showToast("Investigator application rejected successfully", "success");
+        setIsAppRejectModalOpen(false);
+        setAppToReject(null);
+        setAppRejectReason("");
+        fetchApplications(true);
+        fetchStats(); // Update stats
+      } else {
+        const errData = await res.json();
+        showToast(errData.detail || "Rejection failed", "error");
+      }
+    } catch (e) {
+      showToast("An unexpected error occurred", "error");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   // Action - Approve User
   const handleApproveConfirm = async () => {
@@ -1462,6 +1457,66 @@ export default function AdminDashboard() {
                   </div>
 
                 </div>
+              ) : adminTab === "invitations" ? (
+                /* Tab 3: Invitations */
+                <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm animate-slide-in">
+                  <div className="px-6 py-4 border-b border-[#e5e5e5] flex flex-col sm:flex-row gap-4 items-center justify-between bg-slate-50/50 rounded-t-lg">
+                    <h2 className="font-bold text-lg text-[#0a0a0a]/80">Pending Invitations</h2>
+                    <button
+                      onClick={() => setIsInviteModalOpen(true)}
+                      className="px-4 py-2 bg-[#CC2200] hover:bg-red-700 text-white text-sm font-semibold rounded-md shadow-sm transition-colors flex items-center gap-2"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Invite Investigator
+                    </button>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm whitespace-nowrap">
+                      <thead className="bg-[#fafafa] text-[#0a0a0a]/50 uppercase text-[11px] font-bold tracking-wider border-b border-[#e5e5e5]">
+                        <tr>
+                          <th className="py-3 px-6">Name</th>
+                          <th className="py-3 px-6">Email</th>
+                          <th className="py-3 px-6">Status</th>
+                          <th className="py-3 px-6">Sent On</th>
+                          <th className="py-3 px-6">Expires On</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#f0f0f0] bg-white">
+                        {invitationsLoading ? (
+                          Array.from({ length: 3 }).map((_, i) => (
+                            <tr key={i} className="animate-pulse">
+                              <td className="py-4 px-6"><div className="h-4 w-32 bg-slate-200 rounded"></div></td>
+                              <td className="py-4 px-6"><div className="h-4 w-40 bg-slate-200 rounded"></div></td>
+                              <td className="py-4 px-6"><div className="h-4 w-20 bg-slate-200 rounded"></div></td>
+                              <td className="py-4 px-6"><div className="h-4 w-24 bg-slate-200 rounded"></div></td>
+                              <td className="py-4 px-6"><div className="h-4 w-24 bg-slate-200 rounded"></div></td>
+                            </tr>
+                          ))
+                        ) : invitations.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="py-12 text-center text-sm text-[#0a0a0a]/40 bg-white">
+                              No pending invitations found.
+                            </td>
+                          </tr>
+                        ) : (
+                          invitations.map((inv) => (
+                            <tr key={inv.id} className="hover:bg-[#fafafa]/50 transition-colors">
+                              <td className="py-3.5 px-6 font-semibold text-[#0a0a0a]">{inv.full_name}</td>
+                              <td className="py-3.5 px-6 text-[#0a0a0a]/75">{inv.email}</td>
+                              <td className="py-3.5 px-6">
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-50 text-amber-700 border border-amber-200/50">
+                                  {inv.status}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-6 text-xs text-[#0a0a0a]/60">{formatDate(inv.created_at)}</td>
+                              <td className="py-3.5 px-6 text-xs text-[#0a0a0a]/60">{formatDate(inv.expires_at)}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               ) : null}
 
             </div>
@@ -1469,7 +1524,6 @@ export default function AdminDashboard() {
 
           {activeSidebarTab === "Investigators" && (
             <div className="flex flex-col gap-6 animate-slide-in">
-
               {/* Header */}
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-6 rounded-lg border border-[#e5e5e5] shadow-sm">
                 <div>
@@ -1485,26 +1539,7 @@ export default function AdminDashboard() {
                 </button>
               </div>
 
-              {/* Tabs */}
-              <div className="flex border-b border-[#e5e5e5] overflow-x-auto no-scrollbar">
-                {["Active Investigators", "Pending Invitations", "Invitation Logs"].map((tab) => (
-                  <button
-                    key={tab}
-                    onClick={() => setInvestigatorsTab(tab as any)}
-                    className={`whitespace-nowrap px-6 py-3.5 font-semibold text-sm border-b-2 transition-colors ${
-                      investigatorsTab === tab
-                        ? "border-[#CC2200] text-[#CC2200]"
-                        : "border-transparent text-[#0a0a0a]/50 hover:text-[#0a0a0a] hover:bg-black/5"
-                    }`}
-                  >
-                    {tab}
-                  </button>
-                ))}
-              </div>
-              
-              {investigatorsTab === "Active Investigators" && (
-                <div className="flex flex-col gap-4 animate-slide-in">
-
+              {/* Search & Filters */}
               <div className="flex flex-wrap items-center gap-3">
                 <div className="relative flex-1 min-w-[250px]">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#0a0a0a]/40" />
@@ -1637,140 +1672,93 @@ export default function AdminDashboard() {
                   </table>
                 </div>
               </div>
-            </div>
-          )}
 
-
-              {investigatorsTab === "Pending Invitations" && (
-                <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm animate-slide-in">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-sm whitespace-nowrap">
-                      <thead className="bg-[#fafafa] text-[#0a0a0a]/50 uppercase text-[11px] font-bold tracking-wider border-b border-[#e5e5e5]">
-                        <tr>
-                          <th className="py-3 px-6">Name</th>
-                          <th className="py-3 px-6">Email</th>
-                          <th className="py-3 px-6">Status</th>
-                          <th className="py-3 px-6">Sent On</th>
-                          <th className="py-3 px-6">Expires On</th>
+              {/* Pending Verification Collapsible */}
+              <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm overflow-hidden">
+                <button
+                  onClick={() => setIsPendingSectionOpen(!isPendingSectionOpen)}
+                  className="w-full px-6 py-4 flex items-center justify-between bg-slate-50/50 hover:bg-slate-50 transition-colors"
+                >
+                  <div className="flex items-center gap-3">
+                    <h3 className="font-semibold text-lg">Pending Verification</h3>
+                    <span className="bg-amber-100 text-amber-800 text-xs font-bold px-2 py-0.5 rounded-full">{applications.length}</span>
+                  </div>
+                  {isPendingSectionOpen ? <ChevronDown className="w-5 h-5 text-[#0a0a0a]/50" /> : <ChevronRight className="w-5 h-5 text-[#0a0a0a]/50" />}
+                </button>
+                
+                {isPendingSectionOpen && (
+                  <div className="border-t border-[#e5e5e5] overflow-x-auto">
+                    <table className="w-full text-left border-collapse whitespace-nowrap">
+                      <thead>
+                        <tr className="border-b border-[#e5e5e5] text-xs font-bold text-[#0a0a0a]/50 uppercase tracking-wider bg-[#fafafa]/80">
+                          <th className="py-3.5 px-6">Name</th>
+                          <th className="py-3.5 px-6">Organization</th>
+                          <th className="py-3.5 px-6">Department</th>
+                          <th className="py-3.5 px-6">Submitted Date</th>
+                          <th className="py-3.5 px-6">Govt ID Status</th>
+                          <th className="py-3.5 px-6 text-right">Actions</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-[#f0f0f0] bg-white">
-                        {invitationsLoading ? (
-                          Array.from({ length: 3 }).map((_, i) => (
+                      <tbody className="divide-y divide-[#e5e5e5]/80 text-sm">
+                        {applicationsLoading && !applicationsLoaded ? (
+                          [1, 2].map((i) => (
                             <tr key={i} className="animate-pulse">
-                              <td className="py-4 px-6"><div className="h-4 w-32 bg-slate-200 rounded"></div></td>
-                              <td className="py-4 px-6"><div className="h-4 w-40 bg-slate-200 rounded"></div></td>
-                              <td className="py-4 px-6"><div className="h-4 w-20 bg-slate-200 rounded"></div></td>
-                              <td className="py-4 px-6"><div className="h-4 w-24 bg-slate-200 rounded"></div></td>
-                              <td className="py-4 px-6"><div className="h-4 w-24 bg-slate-200 rounded"></div></td>
+                              <td colSpan={6} className="py-4 px-6"><div className="h-4 w-full bg-slate-200 rounded"></div></td>
                             </tr>
                           ))
-                        ) : invitations.length === 0 ? (
+                        ) : applications.length === 0 ? (
                           <tr>
-                            <td colSpan={5} className="py-12 text-center text-sm text-[#0a0a0a]/40 bg-white">
-                              No pending invitations found.
+                            <td colSpan={6} className="py-12 text-center text-sm text-[#0a0a0a]/40 bg-white">
+                              No pending investigator verification requests.
                             </td>
                           </tr>
                         ) : (
-                          invitations.map((inv) => (
-                            <tr key={inv.id} className="hover:bg-[#fafafa]/50 transition-colors">
-                              <td className="py-3.5 px-6 font-semibold text-[#0a0a0a]">{inv.full_name}</td>
-                              <td className="py-3.5 px-6 text-[#0a0a0a]/75">{inv.email}</td>
-                              <td className="py-3.5 px-6">
-                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${inv.status === "Cancelled" ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700"} border border-black/5`}>
-                                  {inv.status}
-                                </span>
+                          applications.map((app) => (
+                            <tr key={app.id} className="hover:bg-[#fafafa]/50 transition-colors">
+                              <td className="py-3.5 px-6 font-semibold text-[#0a0a0a]">
+                                <div className="flex items-center gap-3">
+                                  {app.profile_picture ? (
+                                    <img src={app.profile_picture} alt={app.full_name} className="w-8 h-8 rounded-full object-cover border border-[#e5e5e5]" />
+                                  ) : (
+                                    <div className="w-8 h-8 rounded-full bg-[#CC2200]/10 text-[#CC2200] flex items-center justify-center font-bold text-xs">
+                                      {app.full_name.substring(0, 2).toUpperCase()}
+                                    </div>
+                                  )}
+                                  <div>
+                                    <div>{app.full_name}</div>
+                                    <div className="text-xs text-[#0a0a0a]/50 font-normal">{app.email}</div>
+                                  </div>
+                                </div>
                               </td>
-                              <td className="py-3.5 px-6 text-xs text-[#0a0a0a]/60">{formatDate(inv.created_at)}</td>
-                              <td className="py-3.5 px-6 text-xs text-[#0a0a0a]/60">{formatDate(inv.expires_at)}</td>
+                              <td className="py-3.5 px-6 text-[#0a0a0a]/80">{app.organization}</td>
+                              <td className="py-3.5 px-6 text-[#0a0a0a]/80">{app.department}</td>
+                              <td className="py-3.5 px-6 text-xs text-[#0a0a0a]/60">{formatDate(app.applied_date)}</td>
+                              <td className="py-3.5 px-6">
+                                {app.government_id_path ? (
+                                  <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600">
+                                    <CheckCircle className="w-3.5 h-3.5" /> Uploaded
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-600">
+                                    <AlertCircle className="w-3.5 h-3.5"/> Missing
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3.5 px-6 text-right">
+                                <div className="flex items-center justify-end gap-2">
+                                  <button onClick={() => { setSelectedApplication(app); setIsAppViewDrawerOpen(true); }} className="text-xs font-semibold px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded transition-colors">View Details</button>
+                                  <button onClick={() => { setAppToApprove(app); setIsAppApproveModalOpen(true); }} className="text-xs font-semibold px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded transition-colors">Approve</button>
+                                  <button onClick={() => { setAppToReject(app); setIsAppRejectModalOpen(true); }} className="text-xs font-semibold px-3 py-1.5 bg-[#CC2200] hover:bg-[#CC2200]/90 text-white rounded transition-colors">Reject</button>
+                                </div>
+                              </td>
                             </tr>
                           ))
                         )}
                       </tbody>
                     </table>
                   </div>
-                </div>
-              )}
-
-
-              {investigatorsTab === "Invitation Logs" && (
-                <div className="flex flex-col gap-4 animate-slide-in">
-                  <div className="flex flex-wrap items-center justify-between gap-4">
-                    <div className="flex gap-2">
-                      <button onClick={handleResendSelected} disabled={selectedLogs.length === 0} className={`px-4 py-2 text-sm font-semibold rounded shadow-sm transition-colors flex items-center gap-2 ${selectedLogs.length > 0 ? "bg-[#CC2200] hover:bg-red-700 text-white" : "bg-slate-100 text-slate-400 cursor-not-allowed"}`}>
-                        <Send className="w-4 h-4" /> Resend Selected
-                      </button>
-                      <button onClick={handleCancelSelected} disabled={selectedLogs.length === 0} className={`px-4 py-2 text-sm font-semibold rounded shadow-sm transition-colors flex items-center gap-2 ${selectedLogs.length > 0 ? "bg-slate-200 hover:bg-slate-300 text-slate-800" : "bg-slate-100 text-slate-400 cursor-not-allowed"}`}>
-                        <Trash2 className="w-4 h-4" /> Cancel Selected
-                      </button>
-                      <button onClick={handleExportCSV} className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white text-sm font-semibold rounded shadow-sm transition-colors flex items-center gap-2">
-                        <Download className="w-4 h-4" /> Export CSV
-                      </button>
-                    </div>
-                  </div>
-                  <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm overflow-hidden">
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left text-sm whitespace-nowrap">
-                        <thead className="bg-[#fafafa] text-[#0a0a0a]/50 uppercase text-[11px] font-bold tracking-wider border-b border-[#e5e5e5]">
-                          <tr>
-                            <th className="py-3 px-6"><input type="checkbox" checked={selectedLogs.length > 0 && selectedLogs.length === invitationLogs.length} onChange={handleSelectAllLogs} className="rounded text-[#CC2200] focus:ring-[#CC2200]"/></th>
-                            <th className="py-3 px-6">ID</th>
-                            <th className="py-3 px-6">Recipient</th>
-                            <th className="py-3 px-6">Event Type</th>
-                            <th className="py-3 px-6">Status</th>
-                            <th className="py-3 px-6">Sent At</th>
-                            <th className="py-3 px-6 text-right">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[#f0f0f0] bg-white">
-                          {invitationLogsLoading ? (
-                            Array.from({ length: 5 }).map((_, i) => (
-                              <tr key={i} className="animate-pulse">
-                                <td className="py-4 px-6"><div className="h-4 w-4 bg-slate-200 rounded"></div></td>
-                                <td className="py-4 px-6"><div className="h-4 w-8 bg-slate-200 rounded"></div></td>
-                                <td className="py-4 px-6"><div className="h-4 w-32 bg-slate-200 rounded"></div></td>
-                                <td className="py-4 px-6"><div className="h-4 w-24 bg-slate-200 rounded"></div></td>
-                                <td className="py-4 px-6"><div className="h-4 w-16 bg-slate-200 rounded"></div></td>
-                                <td className="py-4 px-6"><div className="h-4 w-24 bg-slate-200 rounded"></div></td>
-                                <td className="py-4 px-6"><div className="h-4 w-8 bg-slate-200 rounded ml-auto"></div></td>
-                              </tr>
-                            ))
-                          ) : invitationLogs.length === 0 ? (
-                            <tr>
-                              <td colSpan={7} className="py-12 text-center text-sm text-[#0a0a0a]/40">
-                                No invitation logs found.
-                              </td>
-                            </tr>
-                          ) : (
-                            invitationLogs.map((log) => (
-                              <tr key={log.id} className="hover:bg-[#fafafa]/50 transition-colors">
-                                <td className="py-3.5 px-6">
-                                  <input type="checkbox" checked={selectedLogs.includes(log.id)} onChange={() => handleSelectLog(log.id)} className="rounded text-[#CC2200] focus:ring-[#CC2200]"/>
-                                </td>
-                                <td className="py-3.5 px-6 font-mono text-xs text-[#0a0a0a]/60">#{log.id}</td>
-                                <td className="py-3.5 px-6 font-semibold text-[#0a0a0a]">{log.recipient_email}</td>
-                                <td className="py-3.5 px-6 text-[#0a0a0a]/80">{log.event_type}</td>
-                                <td className="py-3.5 px-6">
-                                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${log.status === "SUCCESS" ? "bg-emerald-50 text-emerald-700 border border-emerald-200/50" : "bg-red-50 text-red-700 border border-red-200/50"}`}>
-                                    {log.status}
-                                  </span>
-                                </td>
-                                <td className="py-3.5 px-6 text-xs text-[#0a0a0a]/60">{formatDate(log.created_at)}</td>
-                                <td className="py-3.5 px-6 text-right">
-                                  <button onClick={() => { setSelectedLog(log); setIsLogDrawerOpen(true); }} className="text-[#0a0a0a]/40 hover:text-[#0a0a0a] transition-colors p-1">
-                                    <Eye className="w-4 h-4" />
-                                  </button>
-                                </td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
-              )}
-
+                )}
+              </div>
             </div>
           )}
 
@@ -1802,56 +1790,6 @@ export default function AdminDashboard() {
       </div>
 
       {/* ──────────────── MODALS & DRAWERS ──────────────── */}
-
-
-      {/* Invitation Log Details Drawer */}
-      <div className={`fixed inset-y-0 right-0 w-full max-w-md bg-white shadow-2xl z-[150] transform transition-transform duration-300 ease-in-out ${isLogDrawerOpen ? "translate-x-0" : "translate-x-full"} flex flex-col border-l border-[#e5e5e5]`}>
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[#e5e5e5] bg-slate-50">
-          <h2 className="text-lg font-bold text-[#0a0a0a]">Log Details</h2>
-          <button onClick={() => setIsLogDrawerOpen(false)} className="p-2 hover:bg-[#e5e5e5] rounded-full transition-colors text-[#0a0a0a]/50">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {selectedLog && (
-            <>
-              <div>
-                <h3 className="text-xs font-bold uppercase text-[#0a0a0a]/40 mb-3 tracking-wider">Invitation Information</h3>
-                <div className="space-y-3 bg-[#fafafa] p-4 rounded-lg border border-[#e5e5e5]">
-                  <div className="flex justify-between items-center"><span className="text-sm font-medium text-[#0a0a0a]/60">Log ID</span><span className="text-sm font-mono text-[#0a0a0a]">#{selectedLog.id}</span></div>
-                  <div className="flex justify-between items-center"><span className="text-sm font-medium text-[#0a0a0a]/60">Invitation ID</span><span className="text-sm font-mono text-[#0a0a0a]">#{selectedLog.invitation_id}</span></div>
-                  <div className="flex justify-between items-center"><span className="text-sm font-medium text-[#0a0a0a]/60">Event Type</span><span className="text-sm font-medium text-[#0a0a0a]">{selectedLog.event_type}</span></div>
-                  <div className="flex justify-between items-center"><span className="text-sm font-medium text-[#0a0a0a]/60">Status</span>
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${selectedLog.status === "SUCCESS" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
-                      {selectedLog.status}
-                    </span>
-                  </div>
-                </div>
-              </div>
-              
-              <div>
-                <h3 className="text-xs font-bold uppercase text-[#0a0a0a]/40 mb-3 tracking-wider">Recipient Details</h3>
-                <div className="space-y-3 bg-[#fafafa] p-4 rounded-lg border border-[#e5e5e5]">
-                  <div className="flex justify-between items-center"><span className="text-sm font-medium text-[#0a0a0a]/60">Email</span><span className="text-sm font-medium text-[#0a0a0a]">{selectedLog.recipient_email}</span></div>
-                </div>
-              </div>
-
-              <div>
-                <h3 className="text-xs font-bold uppercase text-[#0a0a0a]/40 mb-3 tracking-wider">Audit Trail</h3>
-                <div className="space-y-3 bg-[#fafafa] p-4 rounded-lg border border-[#e5e5e5]">
-                  <div className="flex justify-between items-center"><span className="text-sm font-medium text-[#0a0a0a]/60">Performed By (ID)</span><span className="text-sm font-medium text-[#0a0a0a]">{selectedLog.performed_by || "System"}</span></div>
-                  <div className="flex justify-between items-center"><span className="text-sm font-medium text-[#0a0a0a]/60">Created At</span><span className="text-sm font-medium text-[#0a0a0a]">{formatDate(selectedLog.created_at)}</span></div>
-                  <div className="flex justify-between items-center"><span className="text-sm font-medium text-[#0a0a0a]/60">IP Address</span><span className="text-sm font-medium text-[#0a0a0a]">{selectedLog.ip_address || "N/A"}</span></div>
-                  <div className="flex flex-col gap-1 mt-2">
-                    <span className="text-sm font-medium text-[#0a0a0a]/60">Message</span>
-                    <p className="text-xs text-[#0a0a0a] bg-white p-2 rounded border border-[#e5e5e5]">{selectedLog.message}</p>
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
 
       {/* Bulk Invite Modal */}
       {isBulkInviteModalOpen && (
@@ -2449,9 +2387,226 @@ export default function AdminDashboard() {
         </div>
       )}
 
+      {/* 6. Investigator Application Detail Side Drawer */}
+      {isAppViewDrawerOpen && selectedApplication && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          <div 
+            className="fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity"
+            onClick={() => setIsAppViewDrawerOpen(false)}
+          />
+          <div className="relative w-full max-w-lg bg-white h-full shadow-2xl flex flex-col animate-slide-left z-10 border-l border-[#e5e5e5]">
+            <div className="px-6 py-5 border-b border-[#e5e5e5] flex justify-between items-center bg-slate-50">
+              <div>
+                <h3 className="text-lg font-bold text-[#0a0a0a]">Investigator Application Profile</h3>
+                <p className="text-xs text-[#0a0a0a]/50">User ID: USR-{selectedApplication.id}</p>
+              </div>
+              <button 
+                onClick={() => setIsAppViewDrawerOpen(false)}
+                className="p-1.5 rounded-full hover:bg-slate-200 text-[#0a0a0a]/60"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
 
+            <div className="p-6 overflow-y-auto flex-1 space-y-6">
+              <div className="flex items-center gap-4.5 pb-6 border-b border-[#f0f0f0]">
+                {selectedApplication.profile_picture ? (
+                  <img 
+                    src={selectedApplication.profile_picture} 
+                    alt={selectedApplication.full_name} 
+                    className="h-20 w-20 rounded-full object-cover border border-[#e5e5e5] shadow"
+                  />
+                ) : (
+                  <div className="h-20 w-20 rounded-full bg-[#CC2200]/10 text-[#CC2200] flex items-center justify-center font-bold text-2xl border border-[#CC2200]/25 shadow">
+                    {selectedApplication.full_name.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2)}
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <h4 className="text-xl font-bold text-[#0a0a0a] truncate">{selectedApplication.full_name}</h4>
+                  <p className="text-sm text-[#0a0a0a]/50 truncate">{selectedApplication.email}</p>
+                  <div className="mt-2.5 flex items-center gap-2">
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                      PENDING VERIFICATION
+                    </span>
+                  </div>
+                </div>
+              </div>
 
+              <div>
+                <h5 className="text-xs font-bold text-[#0a0a0a]/40 uppercase tracking-wider mb-3">Employment Details</h5>
+                <div className="grid grid-cols-2 gap-4 text-sm bg-slate-50 border border-[#e5e5e5] p-4 rounded-lg">
+                  <div>
+                    <span className="block text-xs text-[#0a0a0a]/40">Organization</span>
+                    <span className="font-semibold text-[#0a0a0a]">{selectedApplication.organization}</span>
+                  </div>
+                  <div>
+                    <span className="block text-xs text-[#0a0a0a]/40">Department</span>
+                    <span className="font-semibold text-[#0a0a0a]">{selectedApplication.department}</span>
+                  </div>
+                  <div className="mt-2">
+                    <span className="block text-xs text-[#0a0a0a]/40">Designation</span>
+                    <span className="font-semibold text-[#0a0a0a]">{selectedApplication.designation}</span>
+                  </div>
+                  <div className="mt-2">
+                    <span className="block text-xs text-[#0a0a0a]/40">Badge / Employee ID</span>
+                    <span className="font-semibold text-[#0a0a0a]">{selectedApplication.employee_id}</span>
+                  </div>
+                </div>
+              </div>
 
+              <div>
+                <h5 className="text-xs font-bold text-[#0a0a0a]/40 uppercase tracking-wider mb-3">Contact Information</h5>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between py-1 border-b border-[#f0f0f0]">
+                    <span className="text-[#0a0a0a]/50">Email Address</span>
+                    <span className="font-medium">{selectedApplication.email}</span>
+                  </div>
+                  <div className="flex justify-between py-1 border-b border-[#f0f0f0]">
+                    <span className="text-[#0a0a0a]/50">Phone Number</span>
+                    <span className="font-medium">{selectedApplication.phone || "—"}</span>
+                  </div>
+                  <div className="flex justify-between py-1 border-b border-[#f0f0f0]">
+                    <span className="text-[#0a0a0a]/50">Submission Date</span>
+                    <span className="font-medium">{formatDate(selectedApplication.applied_date)}</span>
+                  </div>
+                </div>
+              </div>
+
+              {selectedApplication.government_id_path && (
+                <div>
+                  <h5 className="text-xs font-bold text-[#0a0a0a]/40 uppercase tracking-wider mb-3">Government Verification Credentials</h5>
+                  <div className="border border-[#e5e5e5] rounded-lg p-3 bg-slate-50 flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <FileText className="h-8 w-8 text-[#CC2200]" />
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold truncate">Verification ID Document</p>
+                        <p className="text-[10px] text-slate-400">PDF/Image Credential</p>
+                      </div>
+                    </div>
+                    <a 
+                      href={selectedApplication.government_id_path} 
+                      target="_blank" 
+                      rel="noreferrer"
+                      className="px-3 py-1.5 bg-[#CC2200] hover:bg-[#CC2200]/95 text-white rounded font-bold text-xs shadow transition-colors inline-flex items-center gap-1"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      View Document
+                    </a>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-[#e5e5e5] bg-slate-50 flex gap-3">
+              <button 
+                onClick={() => {
+                  setIsAppViewDrawerOpen(false);
+                  setAppToApprove(selectedApplication);
+                  setIsAppApproveModalOpen(true);
+                }}
+                className="flex-1 text-center py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold text-sm transition-colors shadow-sm"
+              >
+                Approve Application
+              </button>
+              <button 
+                onClick={() => {
+                  setIsAppViewDrawerOpen(false);
+                  setAppToReject(selectedApplication);
+                  setIsAppRejectModalOpen(true);
+                }}
+                className="flex-1 text-center py-2 bg-[#CC2200] hover:bg-[#CC2200]/90 text-white rounded font-bold text-sm transition-colors shadow-sm"
+              >
+                Reject Application
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 7. Investigator Approve Confirmation Modal */}
+      {isAppApproveModalOpen && appToApprove && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs" onClick={() => setIsAppApproveModalOpen(false)} />
+          <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-xl max-w-md w-full z-10 overflow-hidden relative p-6 animate-scale-up">
+            <h3 className="text-lg font-bold text-[#0a0a0a]">Approve Investigator</h3>
+            <p className="mt-2 text-sm text-[#0a0a0a]/60">
+              Are you sure you want to approve this investigator application? Approving this account will assign the role of Lead Investigator, allowing immediate system access.
+            </p>
+            <div className="mt-3.5 bg-slate-50 border border-[#e5e5e5] p-3 rounded text-sm space-y-1">
+              <p><strong>Name:</strong> {appToApprove.full_name}</p>
+              <p><strong>Email:</strong> {appToApprove.email}</p>
+              <p><strong>Organization:</strong> {appToApprove.organization}</p>
+              <p><strong>Designation:</strong> {appToApprove.designation}</p>
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <button 
+                onClick={() => setIsAppApproveModalOpen(false)}
+                disabled={isSubmitting}
+                className="px-4 py-2 border border-[#e5e5e5] hover:bg-slate-100 rounded text-sm font-semibold transition-colors disabled:opacity-55"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleAppApproveConfirm}
+                disabled={isSubmitting}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white rounded text-sm font-semibold flex items-center gap-1.5 shadow-sm transition-colors"
+              >
+                {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
+                Approve
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 8. Investigator Reject Confirmation Modal */}
+      {isAppRejectModalOpen && appToReject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs" onClick={() => setIsAppRejectModalOpen(false)} />
+          <form 
+            onSubmit={handleAppRejectConfirm}
+            className="bg-white border border-[#e5e5e5] rounded-lg shadow-xl max-w-md w-full z-10 overflow-hidden relative p-6 animate-scale-up"
+          >
+            <h3 className="text-lg font-bold text-[#0a0a0a] text-rose-700">Reject Investigator Application</h3>
+            <p className="mt-2 text-sm text-[#0a0a0a]/60">
+              Are you sure you want to reject the application request from <strong>{appToReject.full_name}</strong>? Please provide a valid justification.
+            </p>
+            
+            <div className="mt-4 space-y-1">
+              <label className="block text-xs font-bold text-[#0a0a0a]/70 uppercase tracking-wide">
+                Rejection Reason <span className="text-[#CC2200]">*</span>
+              </label>
+              <textarea
+                required
+                value={appRejectReason}
+                onChange={(e) => setAppRejectReason(e.target.value)}
+                placeholder="Example: ID document verification failed or badge ID could not be validated..."
+                rows={4}
+                className="w-full border border-[#e5e5e5] rounded p-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#CC2200] focus:border-transparent bg-white shadow-xs"
+              />
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button 
+                type="button"
+                onClick={() => setIsAppRejectModalOpen(false)}
+                disabled={isSubmitting}
+                className="px-4 py-2 border border-[#e5e5e5] hover:bg-slate-100 rounded text-sm font-semibold transition-colors disabled:opacity-55"
+              >
+                Cancel
+              </button>
+              <button 
+                type="submit"
+                disabled={isSubmitting}
+                className="px-4 py-2 bg-[#CC2200] hover:bg-[#CC2200]/90 disabled:bg-[#CC2200]/50 text-white rounded text-sm font-semibold flex items-center gap-1.5 shadow-sm transition-colors"
+              >
+                {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
+                Reject Application
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
     </div>
   );

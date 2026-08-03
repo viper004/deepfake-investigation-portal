@@ -134,7 +134,8 @@ def register_investigator(
     
     if existing_user:
         db_user = existing_user
-        # We don't override password or basic details
+        db_user.role_id = 2
+        db_user.status = "ACTIVE"
     else:
         if not password:
             raise HTTPException(
@@ -147,8 +148,8 @@ def register_investigator(
             email=email,
             password=hashed_password,
             phone=phone,
-            role_id=2,  # INVESTIGATOR (Legacy field)
-            status="PENDING",
+            role_id=2,  # INVESTIGATOR
+            status="ACTIVE",
             profile_picture=profile_pic_url
         )
         db.add(db_user)
@@ -169,10 +170,23 @@ def register_investigator(
     # Mark invitation as accepted
     invitation.status = "ACCEPTED"
     invitation.accepted_at = datetime.now(timezone.utc)
+
+    # Log the completion
+    from app.models.user import InvitationLog
+    log = InvitationLog(
+        invitation_id=invitation.id,
+        event_type="Investigator Role Assigned",
+        status="SUCCESS",
+        recipient_email=invitation.email,
+        message="Investigator registration completed and role activated.",
+        ip_address=None
+    )
+    db.add(log)
+
     db.commit()
     
     return {
-        "message": "Your investigator application has been submitted successfully and is awaiting administrator approval.",
+        "message": "Registration successful. You can now log in as an Investigator.",
         "user_id": db_user.id
     }
 

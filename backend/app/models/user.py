@@ -32,9 +32,9 @@ class User(Base):
 
     # Relationships
     role = relationship("Role", back_populates="users")
-    investigator_profile = relationship("InvestigatorProfile", foreign_keys="[InvestigatorProfile.user_id]", back_populates="user", uselist=False, cascade="all, delete-orphan")
-    investigation_cases = relationship("InvestigationCase", foreign_keys="[InvestigationCase.created_by]", back_populates="creator")
-    assigned_cases = relationship("InvestigationCase", foreign_keys="[InvestigationCase.assigned_expert]", back_populates="expert")
+    investigator_profile = relationship("InvestigatorProfile", foreign_keys="InvestigatorProfile.user_id", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    investigation_cases = relationship("InvestigationCase", foreign_keys="InvestigationCase.created_by", back_populates="creator")
+    assigned_cases = relationship("InvestigationCase", foreign_keys="InvestigationCase.assigned_expert", back_populates="expert")
     evidence_uploaded = relationship("EvidenceFile", back_populates="uploader")
     reviews = relationship("ForensicReview", back_populates="reviewer")
     notes = relationship("InvestigationNote", back_populates="user")
@@ -42,7 +42,7 @@ class User(Base):
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
 
     # New Enterprise Architecture Relationships
-    account_roles = relationship("AccountRole", foreign_keys="[AccountRole.account_id]", back_populates="account", cascade="all, delete-orphan")
+    account_roles = relationship("AccountRole", foreign_keys="AccountRole.account_id", back_populates="account", cascade="all, delete-orphan")
     user_profile = relationship("UserProfile", back_populates="account", uselist=False, cascade="all, delete-orphan")
 
 
@@ -56,15 +56,9 @@ class InvestigatorProfile(Base):
     designation = Column(String(100), nullable=True)
     employee_id = Column(String(100), nullable=True)
     government_id_path = Column(String(255), nullable=True)
-    rejection_reason = Column(String(500), nullable=True)
     applied_date = Column(DateTime(timezone=True), server_default=func.now())
 
-    verification_status = Column(String(50), default="PENDING", nullable=False)
-    approved_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    approved_at = Column(DateTime(timezone=True), nullable=True)
-
     user = relationship("User", foreign_keys=[user_id], back_populates="investigator_profile")
-    approver = relationship("User", foreign_keys=[approved_by])
 
 class AccountRole(Base):
     __tablename__ = "account_roles"
@@ -100,7 +94,12 @@ class InvestigatorInvitation(Base):
     email = Column(String(100), index=True, nullable=False)
     full_name = Column(String(100), nullable=False)
     phone = Column(String(20), nullable=True)
-    status = Column(String(50), default="PENDING", nullable=False) # PENDING, COMPLETED, CANCELLED
+    status = Column(String(50), default="Pending", nullable=False) # Pending, Delivered, Failed, Expired, Accepted, Cancelled
+    invitation_type = Column(String(50), default="New Investigator", nullable=False)
+    delivery_status = Column(String(50), default="Pending", nullable=False)
+    send_attempts = Column(Integer, default=0, nullable=False)
+    last_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    accepted_at = Column(DateTime(timezone=True), nullable=True)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
@@ -110,4 +109,21 @@ class InvestigatorInvitation(Base):
 
     creator = relationship("User", foreign_keys=[created_by])
     account = relationship("User", foreign_keys=[account_id])
+    logs = relationship("InvitationLog", back_populates="invitation", cascade="all, delete-orphan")
 
+class InvitationLog(Base):
+    __tablename__ = "invitation_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    invitation_id = Column(Integer, ForeignKey("investigator_invitations.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_type = Column(String(100), nullable=False)
+    status = Column(String(50), nullable=False)
+    performed_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    recipient_email = Column(String(100), nullable=False)
+    message = Column(String(500), nullable=True)
+    ip_address = Column(String(50), nullable=True)
+    user_agent = Column(String(255), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    invitation = relationship("InvestigatorInvitation", back_populates="logs")
+    performer = relationship("User", foreign_keys=[performed_by])
