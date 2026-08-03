@@ -14,8 +14,10 @@ export default auth((req) => {
 
   // If already logged in and trying to visit /login or /register, redirect to correct dashboard
   if ((req.nextUrl.pathname === "/login" || req.nextUrl.pathname === "/register") && isLoggedIn) {
-    const email = req.auth?.user?.email;
-    const dest = email === "superuser@example.com" ? "/admin" : "/dashboard";
+    const roles = req.auth?.user?.roles || [];
+    const role = req.auth?.user?.role;
+    const hasAdmin = roles.includes(1) || role === 1;
+    const dest = hasAdmin ? "/admin" : "/dashboard";
     return NextResponse.redirect(new URL(dest, req.nextUrl.origin));
   }
 

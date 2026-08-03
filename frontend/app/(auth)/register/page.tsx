@@ -21,6 +21,9 @@ import {
 export default function RegisterPage() {
   const router = useRouter();
   const [flow, setFlow] = useState<"user" | "investigator" | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [isUpgrade, setIsUpgrade] = useState(false);
+  const [tokenVerifying, setTokenVerifying] = useState(false);
 
   const [formData, setFormData] = useState({
     full_name: "",
@@ -53,7 +56,24 @@ export default function RegisterPage() {
     // Check search params
     const params = new URLSearchParams(window.location.search);
     const f = params.get("flow");
-    if (f === "investigator") {
+    const t = params.get("token");
+    if (t) {
+      setToken(t);
+      setFlow("investigator");
+      setTokenVerifying(true);
+      fetch(`http://127.0.0.1:8000/api/v1/auth/verify-invitation?token=${t}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.email) {
+            setFormData(prev => ({ ...prev, email: data.email, full_name: data.full_name || prev.full_name }));
+            setIsUpgrade(!!data.is_upgrade);
+          } else {
+            setError(data.detail || "Invalid token");
+          }
+        })
+        .catch(() => setError("Failed to verify invitation token"))
+        .finally(() => setTokenVerifying(false));
+    } else if (f === "investigator") {
       setFlow("investigator");
     } else {
       setFlow("user");
@@ -70,7 +90,7 @@ export default function RegisterPage() {
     setError("");
     setSuccessMsg("");
 
-    if (formData.password !== formData.confirm_password) {
+    if (!isUpgrade && formData.password !== formData.confirm_password) {
       setError("Passwords do not match");
       setLoading(false);
       return;
@@ -102,7 +122,13 @@ export default function RegisterPage() {
       let endpoint = "http://127.0.0.1:8000/api/v1/auth/register/user";
 
       if (flow === "investigator") {
+        if (!token) {
+          setError("Investigator registration requires a valid invitation token.");
+          setLoading(false);
+          return;
+        }
         endpoint = "http://127.0.0.1:8000/api/v1/auth/register/investigator";
+        dataToSend.append("invitation_token", token);
         dataToSend.append("organization", formData.organization);
         dataToSend.append("department", formData.department);
         dataToSend.append("designation", formData.designation);
@@ -139,7 +165,7 @@ export default function RegisterPage() {
     }
   };
 
-  if (flow === null) {
+  if (flow === null || tokenVerifying) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#fafafa]">
         <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[#CC2200]"></div>
@@ -247,9 +273,10 @@ export default function RegisterPage() {
                         type="text"
                         name="full_name"
                         required
+                        readOnly={!!token && !isUpgrade && !!formData.full_name}
                         value={formData.full_name}
                         onChange={handleChange}
-                        className="block w-full pl-10 bg-[#fafafa] border border-[#e5e5e5] rounded-md py-2.5 text-[#0a0a0a] focus:ring-1 focus:ring-[#CC2200] focus:border-[#CC2200] sm:text-sm transition-colors outline-none"
+                        className="block w-full pl-10 bg-[#fafafa] border border-[#e5e5e5] rounded-md py-2.5 text-[#0a0a0a] focus:ring-1 focus:ring-[#CC2200] focus:border-[#CC2200] sm:text-sm transition-colors outline-none disabled:opacity-50"
                         placeholder="Jane Doe"
                       />
                     </div>
@@ -268,9 +295,10 @@ export default function RegisterPage() {
                         type="email"
                         name="email"
                         required
+                        readOnly={!!token}
                         value={formData.email}
                         onChange={handleChange}
-                        className="block w-full pl-10 bg-[#fafafa] border border-[#e5e5e5] rounded-md py-2.5 text-[#0a0a0a] focus:ring-1 focus:ring-[#CC2200] focus:border-[#CC2200] sm:text-sm transition-colors outline-none"
+                        className={`block w-full pl-10 border border-[#e5e5e5] rounded-md py-2.5 text-[#0a0a0a] focus:ring-1 focus:ring-[#CC2200] focus:border-[#CC2200] sm:text-sm transition-colors outline-none ${token ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : 'bg-[#fafafa]'}`}
                         placeholder={flow === "investigator" ? "jane.doe@agency.gov" : "jane.doe@email.com"}
                       />
                     </div>
@@ -488,47 +516,52 @@ export default function RegisterPage() {
                     </div>
                   </div>
 
-                  {/* Password */}
-                  <div>
-                    <label className="block text-sm font-semibold text-[#0a0a0a]/80 mb-1.5">
-                      Password *
-                    </label>
-                    <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <Lock className="h-5 w-5 text-[#0a0a0a]/40" />
+                  {/* Password fields only if not upgrading */}
+                  {!isUpgrade && (
+                    <>
+                      {/* Password */}
+                      <div>
+                        <label className="block text-sm font-semibold text-[#0a0a0a]/80 mb-1.5">
+                          Password *
+                        </label>
+                        <div className="relative">
+                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <Lock className="h-5 w-5 text-[#0a0a0a]/40" />
+                          </div>
+                          <input
+                            type="password"
+                            name="password"
+                            required
+                            value={formData.password}
+                            onChange={handleChange}
+                            className="block w-full pl-10 bg-[#fafafa] border border-[#e5e5e5] rounded-md py-2.5 text-[#0a0a0a] focus:ring-1 focus:ring-[#CC2200] focus:border-[#CC2200] sm:text-sm transition-colors outline-none"
+                            placeholder="••••••••"
+                          />
+                        </div>
                       </div>
-                      <input
-                        type="password"
-                        name="password"
-                        required
-                        value={formData.password}
-                        onChange={handleChange}
-                        className="block w-full pl-10 bg-[#fafafa] border border-[#e5e5e5] rounded-md py-2.5 text-[#0a0a0a] focus:ring-1 focus:ring-[#CC2200] focus:border-[#CC2200] sm:text-sm transition-colors outline-none"
-                        placeholder="••••••••"
-                      />
-                    </div>
-                  </div>
 
-                  {/* Confirm Password */}
-                  <div>
-                    <label className="block text-sm font-semibold text-[#0a0a0a]/80 mb-1.5">
-                      Confirm Password *
-                    </label>
-                    <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <Lock className="h-5 w-5 text-[#0a0a0a]/40" />
+                      {/* Confirm Password */}
+                      <div>
+                        <label className="block text-sm font-semibold text-[#0a0a0a]/80 mb-1.5">
+                          Confirm Password *
+                        </label>
+                        <div className="relative">
+                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <Lock className="h-5 w-5 text-[#0a0a0a]/40" />
+                          </div>
+                          <input
+                            type="password"
+                            name="confirm_password"
+                            required
+                            value={formData.confirm_password}
+                            onChange={handleChange}
+                            className="block w-full pl-10 bg-[#fafafa] border border-[#e5e5e5] rounded-md py-2.5 text-[#0a0a0a] focus:ring-1 focus:ring-[#CC2200] focus:border-[#CC2200] sm:text-sm transition-colors outline-none"
+                            placeholder="••••••••"
+                          />
+                        </div>
                       </div>
-                      <input
-                        type="password"
-                        name="confirm_password"
-                        required
-                        value={formData.confirm_password}
-                        onChange={handleChange}
-                        className="block w-full pl-10 bg-[#fafafa] border border-[#e5e5e5] rounded-md py-2.5 text-[#0a0a0a] focus:ring-1 focus:ring-[#CC2200] focus:border-[#CC2200] sm:text-sm transition-colors outline-none"
-                        placeholder="••••••••"
-                      />
-                    </div>
-                  </div>
+                    </>
+                  )}
                 </div>
 
                 <div className="pt-4">

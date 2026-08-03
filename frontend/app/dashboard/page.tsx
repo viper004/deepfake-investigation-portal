@@ -35,9 +35,9 @@ import {
   FileUp,
   ExternalLink,
   ChevronDown,
-  Info,
   Notebook
 } from "lucide-react";
+import WorkspaceSwitcher from "@/components/WorkspaceSwitcher";
 
 const BACKEND_URL = "http://127.0.0.1:8000";
 
@@ -1151,6 +1151,9 @@ export default function UserDashboard() {
                   </div>
                 )}
               </div>
+
+              {/* Workspace Switcher */}
+              <WorkspaceSwitcher />
 
               {/* Profile Menu Dropdown */}
               <div className="relative" ref={profileRef}>
