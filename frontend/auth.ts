@@ -29,6 +29,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
               email: data.user.email,
               name: data.user.full_name,
               role: data.user.role_id,
+              roles: data.user.roles,
               status: data.user.status,
               accessToken: data.access_token
             };
@@ -49,11 +50,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
-        // @ts-ignore
         token.role = user.role;
-        // @ts-ignore
+        token.roles = user.roles;
         token.status = user.status;
-        // @ts-ignore
         token.accessToken = user.accessToken;
       }
       return token;
@@ -61,11 +60,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     async session({ session, token }) {
       if (token) {
         session.user.id = token.id as string;
-        // @ts-ignore - Adding custom fields to NextAuth Session
         session.user.role = token.role;
-        // @ts-ignore
+        session.user.roles = token.roles;
         session.user.status = token.status;
-        // @ts-ignore
         session.accessToken = token.accessToken;
       }
       return session;

@@ -49,6 +49,7 @@ class Role(Base):
     description = Column(Text)
 
     users = relationship("User", back_populates="role")
+    account_roles = relationship("AccountRole", back_populates="role", cascade="all, delete-orphan")
 
 
 class InvestigationCase(Base):

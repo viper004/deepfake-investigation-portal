@@ -11,7 +11,7 @@ from app.database.database import SessionLocal
 from app.schemas.user import UserCreate, UserResponse, UserLogin
 from app.services.user import get_user_by_email, create_user
 from app.utils.auth import verify_password, create_access_token, get_password_hash
-from app.models.user import User, InvestigatorProfile
+from app.models.user import User, InvestigatorProfile, InvestigatorInvitation
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -68,9 +68,10 @@ def register_user(
 
 @router.post("/register/investigator", status_code=status.HTTP_201_CREATED)
 def register_investigator(
+    invitation_token: str = Form(...),
     full_name: str = Form(...),
     email: str = Form(...),
-    password: str = Form(...),
+    password: str = Form(""),
     phone: Optional[str] = Form(None),
     organization: str = Form(...),
     department: str = Form(...),
@@ -80,13 +81,38 @@ def register_investigator(
     profile_picture_file: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db)
 ):
-    if get_user_by_email(db, email):
+    invitation = db.query(InvestigatorInvitation).filter(
+        InvestigatorInvitation.token == invitation_token,
+        InvestigatorInvitation.status == "PENDING"
+    ).first()
+    
+    if not invitation:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
+            detail="Invalid or expired invitation token"
         )
     
-    hashed_password = get_password_hash(password)
+    if invitation.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+        invitation.status = "EXPIRED"
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invitation token has expired"
+        )
+        
+    if invitation.email.lower() != email.lower():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email does not match the invitation"
+        )
+
+    existing_user = get_user_by_email(db, email)
+    
+    if existing_user and not invitation.account_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered, but this is a new invitation"
+        )
     
     # Save Government ID
     os.makedirs("uploads/gov_ids", exist_ok=True)
@@ -106,19 +132,28 @@ def register_investigator(
             shutil.copyfileobj(profile_picture_file.file, buffer)
         profile_pic_url = f"http://127.0.0.1:8000/api/v1/auth/document/profiles/{prof_unique_name}"
     
-    # Create User with Status PENDING and role_id 2 (INVESTIGATOR)
-    db_user = User(
-        full_name=full_name,
-        email=email,
-        password=hashed_password,
-        phone=phone,
-        role_id=2,  # INVESTIGATOR
-        status="PENDING",
-        profile_picture=profile_pic_url
-    )
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
+    if existing_user:
+        db_user = existing_user
+        # We don't override password or basic details
+    else:
+        if not password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Password is required for new accounts"
+            )
+        hashed_password = get_password_hash(password)
+        db_user = User(
+            full_name=full_name,
+            email=email,
+            password=hashed_password,
+            phone=phone,
+            role_id=2,  # INVESTIGATOR (Legacy field)
+            status="PENDING",
+            profile_picture=profile_pic_url
+        )
+        db.add(db_user)
+        db.commit()
+        db.refresh(db_user)
     
     # Create InvestigatorProfile
     db_profile = InvestigatorProfile(
@@ -130,11 +165,36 @@ def register_investigator(
         government_id_path=gov_id_url
     )
     db.add(db_profile)
+    
+    # Mark invitation as accepted
+    invitation.status = "ACCEPTED"
+    invitation.accepted_at = datetime.now(timezone.utc)
     db.commit()
     
     return {
         "message": "Your investigator application has been submitted successfully and is awaiting administrator approval.",
         "user_id": db_user.id
+    }
+
+@router.get("/verify-invitation")
+def verify_invitation(token: str, db: Session = Depends(get_db)):
+    invitation = db.query(InvestigatorInvitation).filter(
+        InvestigatorInvitation.token == token,
+        InvestigatorInvitation.status == "PENDING"
+    ).first()
+    
+    if not invitation:
+        raise HTTPException(status_code=400, detail="Invalid or expired invitation token")
+        
+    if invitation.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+        invitation.status = "EXPIRED"
+        db.commit()
+        raise HTTPException(status_code=400, detail="Invitation token has expired")
+        
+    return {
+        "email": invitation.email,
+        "full_name": invitation.full_name,
+        "is_upgrade": invitation.account_id is not None
     }
 
 @router.get("/document/profiles/{filename}")
@@ -166,7 +226,7 @@ def login(credentials: UserLogin, db: Session = Depends(get_db)):
     # Hardcoded admin login
     if credentials.email == "superuser@example.com" and credentials.password == "password":
         access_token = create_access_token(
-            data={"sub": "admin", "email": "superuser@example.com", "role": 1}
+            data={"sub": "admin", "email": "superuser@example.com", "role": 1, "roles": [1]}
         )
         return {
             "message": "Login successful",
@@ -177,6 +237,7 @@ def login(credentials: UserLogin, db: Session = Depends(get_db)):
                 "full_name": "System Admin",
                 "email": "superuser@example.com",
                 "role_id": 1,
+                "roles": [1],
                 "status": "ACTIVE",
                 "profile_picture": None
             }
@@ -218,9 +279,14 @@ def login(credentials: UserLogin, db: Session = Depends(get_db)):
     user.last_login = datetime.now(timezone.utc)
     db.commit()
     
+    # Fetch roles from AccountRole mapping
+    roles = [ar.role_id for ar in user.account_roles]
+    if not roles and user.role_id:
+        roles = [user.role_id]
+    
     # Create JWT
     access_token = create_access_token(
-        data={"sub": str(user.id), "email": user.email, "role": user.role_id}
+        data={"sub": str(user.id), "email": user.email, "role": user.role_id, "roles": roles}
     )
     
     return {
@@ -232,6 +298,7 @@ def login(credentials: UserLogin, db: Session = Depends(get_db)):
             "full_name": user.full_name,
             "email": user.email,
             "role_id": user.role_id,
+            "roles": roles,
             "status": user.status,
             "profile_picture": user.profile_picture
         }

@@ -1,14 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Header
+from fastapi import APIRouter, Depends, HTTPException, status, Header, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, desc
-from typing import Optional
+from typing import Optional, List
 from jose import jwt, JWTError
+import uuid
+from datetime import datetime, timedelta, timezone
 
 from app.database.database import SessionLocal
-from app.models.user import User
+from app.models.user import User, InvestigatorInvitation, AccountRole
 from app.models.models import Role
 from app.schemas.user import UserResponse
 from app.utils.auth import SECRET_KEY, ALGORITHM
+from app.services.email_service import send_investigator_invitation_email
 from pydantic import BaseModel, EmailStr
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -31,8 +34,12 @@ def get_current_admin(authorization: str = Header(None)):
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email = payload.get("email")
         role = payload.get("role")
-        # Allow superuser or anyone with role_id == 1 (Admin)
-        if email != "superuser@example.com" and role != 1:
+        roles = payload.get("roles", [])
+        
+        is_admin = (1 in roles) or (role == 1)
+        
+        # Allow superuser or anyone with Admin role
+        if email != "superuser@example.com" and not is_admin:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied. Administrators only."
@@ -55,6 +62,104 @@ class UserUpdate(BaseModel):
 
 class RejectRequest(BaseModel):
     reason: str
+
+class InvitationRequest(BaseModel):
+    full_name: str
+    email: EmailStr
+    phone: Optional[str] = None
+
+class BulkInvitationRequest(BaseModel):
+    invitations: List[InvitationRequest]
+
+@router.post("/invitations")
+def create_invitations(req: BulkInvitationRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db), admin: dict = Depends(get_current_admin)):
+    admin_sub = admin.get("sub")
+    created_by_id = int(admin_sub) if admin_sub and str(admin_sub).isdigit() else None
+    
+    sent_count = 0
+    skipped_existing = 0
+    skipped_duplicate = 0
+    skipped_pending = 0
+    
+    seen_emails = set()
+    
+    for inv in req.invitations:
+        email_lower = inv.email.lower()
+        if email_lower in seen_emails:
+            skipped_duplicate += 1
+            continue
+        seen_emails.add(email_lower)
+        
+        existing_user = db.query(User).filter(User.email == inv.email).first()
+        if existing_user:
+            skipped_existing += 1
+            continue
+            
+        pending_invite = db.query(InvestigatorInvitation).filter(InvestigatorInvitation.email == inv.email, InvestigatorInvitation.status == "PENDING").first()
+        if pending_invite:
+            skipped_pending += 1
+            continue
+            
+        token = uuid.uuid4().hex
+        invite = InvestigatorInvitation(
+            full_name=inv.full_name,
+            email=inv.email,
+            phone=inv.phone,
+            token=token,
+            status="PENDING",
+            expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+            created_by=created_by_id
+        )
+        db.add(invite)
+        sent_count += 1
+        background_tasks.add_task(send_investigator_invitation_email, inv.email, inv.full_name, token)
+        
+    db.commit()
+    
+    return {
+        "message": "Bulk invitation processing complete",
+        "sent": sent_count,
+        "skipped_existing": skipped_existing,
+        "skipped_duplicate": skipped_duplicate,
+        "skipped_pending": skipped_pending
+    }
+
+@router.get("/invitations")
+def list_invitations(db: Session = Depends(get_db), admin: dict = Depends(get_current_admin)):
+    invites = db.query(InvestigatorInvitation).order_by(desc(InvestigatorInvitation.created_at)).all()
+    return [{
+        "id": i.id,
+        "email": i.email,
+        "full_name": i.full_name,
+        "status": i.status,
+        "created_at": i.created_at,
+        "expires_at": i.expires_at
+    } for i in invites]
+
+@router.post("/users/{account_id}/upgrade-investigator")
+def upgrade_user(account_id: int, db: Session = Depends(get_db), admin: dict = Depends(get_current_admin)):
+    user = db.query(User).filter(User.id == account_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    token = uuid.uuid4().hex
+    admin_sub = admin.get("sub")
+    created_by_id = int(admin_sub) if str(admin_sub).isdigit() else None
+    
+    invite = InvestigatorInvitation(
+        full_name=user.full_name,
+        email=user.email,
+        phone=user.phone,
+        token=token,
+        status="PENDING",
+        account_id=user.id,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+        created_by=created_by_id
+    )
+    db.add(invite)
+    db.commit()
+    print(f"[Email Simulation] Sending upgrade link to {user.email} with token {token}")
+    return {"message": "Upgrade invitation sent successfully"}
 
 @router.get("/users")
 def get_users(
@@ -263,7 +368,7 @@ def list_investigator_applications(
     admin: dict = Depends(get_current_admin)
 ):
     from app.models.user import InvestigatorProfile
-    applications = db.query(User).join(InvestigatorProfile).filter(
+    applications = db.query(User).join(InvestigatorProfile, User.id == InvestigatorProfile.user_id).filter(
         User.role_id == 2,
         User.status == "PENDING"
     ).order_by(desc(User.created_at)).all()

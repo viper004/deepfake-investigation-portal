@@ -23,9 +23,16 @@ import {
   UserCheck,
   UserX,
   Plus,
-  Download
+  Download,
+  MoreVertical,
+  Key,
+  Send,
+  CheckCircle,
+  AlertCircle,
+  ChevronDown
 } from "lucide-react";
 import Link from "next/link";
+import WorkspaceSwitcher from "@/components/WorkspaceSwitcher";
 
 const BACKEND_URL = "http://127.0.0.1:8000";
 
@@ -50,18 +57,42 @@ interface ToastType {
   type: "success" | "error";
 }
 
+const createEmptyRow = () => ({
+  id: crypto.randomUUID(),
+  full_name: "",
+  email: "",
+  phone: ""
+});
+
 export default function AdminDashboard() {
   const { data: sessionData, status } = useSession();
   const session = sessionData as any;
   const router = useRouter();
 
-  // Sidebar Tab State (Overview vs User Management vs Investigator Applications)
-  const [activeSidebarTab, setActiveSidebarTab] = useState<"Overview" | "User Management" | "Investigator Applications" | "System Alerts" | "Audit Logs" | "Configuration">("Overview");
+  // Sidebar Tab State (Overview vs User Management vs Investigators)
+  const [activeSidebarTab, setActiveSidebarTab] = useState<"Overview" | "User Management" | "Investigators" | "System Alerts" | "Audit Logs" | "Configuration">("Overview");
 
   // Investigator Applications State
   const [applications, setApplications] = useState<any[]>([]);
   const [applicationsLoading, setApplicationsLoading] = useState(true);
   const [applicationsLoaded, setApplicationsLoaded] = useState(false);
+  
+  // Investigators Management State
+  const [investigators, setInvestigators] = useState<any[]>([]);
+  const [investigatorsTotal, setInvestigatorsTotal] = useState(0);
+  const [investigatorsLoading, setInvestigatorsLoading] = useState(true);
+  const [investigatorsLoaded, setInvestigatorsLoaded] = useState(false);
+  const [investigatorsPage, setInvestigatorsPage] = useState(1);
+  const [investigatorsSearch, setInvestigatorsSearch] = useState("");
+  const [investigatorsOrgFilter, setInvestigatorsOrgFilter] = useState("");
+  const [investigatorsDeptFilter, setInvestigatorsDeptFilter] = useState("");
+  const [investigatorsStatusFilter, setInvestigatorsStatusFilter] = useState("");
+  const [investigatorsSort, setInvestigatorsSort] = useState("name");
+  
+  const [isPendingSectionOpen, setIsPendingSectionOpen] = useState(false);
+  const [bulkRows, setBulkRows] = useState(Array.from({ length: 5 }, createEmptyRow));
+  const [isBulkInviteModalOpen, setIsBulkInviteModalOpen] = useState(false);
+  const [bulkInviteResult, setBulkInviteResult] = useState<any>(null);
   const [selectedApplication, setSelectedApplication] = useState<any | null>(null);
   const [isAppViewDrawerOpen, setIsAppViewDrawerOpen] = useState(false);
   
@@ -73,7 +104,7 @@ export default function AdminDashboard() {
   const [appRejectReason, setAppRejectReason] = useState("");
 
   // User Management Sub-Tabs (Active Users vs Pending Requests)
-  const [adminTab, setAdminTab] = useState<"active" | "pending">("active");
+  const [adminTab, setAdminTab] = useState<"active" | "pending" | "invitations">("active");
 
   // Toasts State
   const [toasts, setToasts] = useState<ToastType[]>([]);
@@ -104,6 +135,13 @@ export default function AdminDashboard() {
   const [pendingUsers, setPendingUsers] = useState<UserType[]>([]);
   const [pendingLoading, setPendingLoading] = useState(true);
   const [pendingUsersLoaded, setPendingUsersLoaded] = useState(false);
+
+  // Invitations State
+  const [invitations, setInvitations] = useState<any[]>([]);
+  const [invitationsLoading, setInvitationsLoading] = useState(true);
+  const [invitationsLoaded, setInvitationsLoaded] = useState(false);
+  const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
+  const [inviteForm, setInviteForm] = useState({ full_name: "", email: "", phone: "" });
 
   // Modal States
   const [selectedUser, setSelectedUser] = useState<UserType | null>(null);
@@ -240,6 +278,39 @@ export default function AdminDashboard() {
       setPendingLoading(false);
     }
   }, [session?.accessToken, pendingUsersLoaded, showToast]);
+  // Fetch Investigators
+  const fetchInvestigators = useCallback(async (force = false) => {
+    if (!session?.accessToken) return;
+    if (investigatorsLoaded && !force) return;
+    try {
+      setInvestigatorsLoading(true);
+      const queryParams = new URLSearchParams({
+        page: investigatorsPage.toString(),
+        limit: "10",
+        role_id: "2"
+      });
+      if (investigatorsSearch) queryParams.append("search", investigatorsSearch);
+      if (investigatorsStatusFilter) queryParams.append("status_filter", investigatorsStatusFilter);
+      // the backend user API might not support org/dept directly but we'll include sorting
+      queryParams.append("sort_by", investigatorsSort);
+
+      const res = await fetch(`${BACKEND_URL}/api/admin/users?${queryParams.toString()}`, {
+        headers: {
+          Authorization: `Bearer ${session.accessToken}`
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setInvestigators(data.users);
+        setInvestigatorsTotal(data.total);
+        setInvestigatorsLoaded(true);
+      }
+    } catch (err) {
+      showToast("Error fetching active investigators.", "error");
+    } finally {
+      setInvestigatorsLoading(false);
+    }
+  }, [session?.accessToken, investigatorsPage, investigatorsSearch, investigatorsStatusFilter, investigatorsSort, investigatorsLoaded, showToast]);
 
   // Fetch Investigator Applications
   const fetchApplications = useCallback(async (force = false) => {
@@ -265,13 +336,36 @@ export default function AdminDashboard() {
     }
   }, [session?.accessToken, applicationsLoaded, showToast]);
 
+  // Fetch Invitations
+  const fetchInvitations = useCallback(async (force = false) => {
+    if (!session?.accessToken) return;
+    if (invitationsLoaded && !force) return;
+    try {
+      setInvitationsLoading(true);
+      const res = await fetch(`${BACKEND_URL}/api/v1/admin/invitations`, {
+        headers: { Authorization: `Bearer ${session.accessToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setInvitations(data);
+        setInvitationsLoaded(true);
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("Error fetching invitations.", "error");
+    } finally {
+      setInvitationsLoading(false);
+    }
+  }, [session?.accessToken, invitationsLoaded, showToast]);
+
   // Combined Refresh (Clears Cache / Forces Refetch)
   const refreshAllData = useCallback(() => {
     fetchStats();
     fetchUsers(true);
     fetchPendingUsers(true);
     fetchApplications(true);
-  }, [fetchStats, fetchUsers, fetchPendingUsers, fetchApplications]);
+    fetchInvitations(true);
+  }, [fetchStats, fetchUsers, fetchPendingUsers, fetchApplications, fetchInvitations]);
 
   // Initial Fetches (Always load stats and active users initially)
   useEffect(() => {
@@ -290,11 +384,14 @@ export default function AdminDashboard() {
         fetchUsers();
       } else if (adminTab === "pending" && !pendingUsersLoaded) {
         fetchPendingUsers();
+      } else if (adminTab === "invitations" && !invitationsLoaded) {
+        fetchInvitations();
       }
-    } else if (activeSidebarTab === "Investigator Applications" && !applicationsLoaded) {
+    } else if (activeSidebarTab === "Investigators" && (!applicationsLoaded || !investigatorsLoaded)) {
       fetchApplications();
+      fetchInvestigators();
     }
-  }, [adminTab, activeSidebarTab, activeUsersLoaded, pendingUsersLoaded, applicationsLoaded, session?.accessToken, fetchUsers, fetchPendingUsers, fetchApplications]);
+  }, [adminTab, activeSidebarTab, activeUsersLoaded, pendingUsersLoaded, invitationsLoaded, applicationsLoaded, investigatorsLoaded, session?.accessToken, fetchUsers, fetchPendingUsers, fetchApplications, fetchInvitations, fetchInvestigators]);
 
   // Refetch active users when active tab filters/pagination parameters change
   useEffect(() => {
@@ -302,6 +399,59 @@ export default function AdminDashboard() {
       fetchUsers(true);
     }
   }, [usersPage, usersSearch, usersRoleFilter, usersStatusFilter, usersSortBy, session?.accessToken, activeSidebarTab, adminTab]);
+
+  const handleInviteSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!session?.accessToken) return;
+    try {
+      setIsSubmitting(true);
+      const res = await fetch(`${BACKEND_URL}/api/v1/admin/invitations`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.accessToken}`
+        },
+        body: JSON.stringify({ invitations: [inviteForm] })
+      });
+      if (res.ok) {
+        showToast("Invitation sent successfully");
+        setIsInviteModalOpen(false);
+        setInviteForm({ full_name: "", email: "", phone: "" });
+        fetchInvitations(true);
+      } else {
+        const data = await res.json();
+        showToast(data.detail || "Failed to send invitation", "error");
+      }
+    } catch (err) {
+      showToast("Error sending invitation", "error");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleUpgradeUser = async (userId: number) => {
+    if (!session?.accessToken) return;
+    try {
+      setIsSubmitting(true);
+      const res = await fetch(`${BACKEND_URL}/api/v1/admin/users/${userId}/upgrade-investigator`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.accessToken}`
+        }
+      });
+      if (res.ok) {
+        showToast("Upgrade invitation sent successfully");
+        fetchInvitations(true);
+      } else {
+        const data = await res.json();
+        showToast(data.detail || "Failed to send upgrade invitation", "error");
+      }
+    } catch (err) {
+      showToast("Error sending upgrade invitation", "error");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   // Action - Approve Investigator Application
   const handleAppApproveConfirm = async () => {
@@ -416,6 +566,44 @@ export default function AdminDashboard() {
       }
     } catch (err) {
       showToast("Network error. Failed to reject user.", "error");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Action - Bulk Invite Investigators
+  const handleBulkInvite = async () => {
+    if (!session?.accessToken) return;
+    
+    const validRows = bulkRows.filter(r => r.full_name.trim() !== "" && r.email.trim() !== "");
+    if (validRows.length === 0) {
+      showToast("Please enter at least one valid investigator to invite.", "error");
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      setBulkInviteResult(null);
+      const res = await fetch(`${BACKEND_URL}/api/admin/invitations`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.accessToken}`
+        },
+        body: JSON.stringify({ invitations: validRows })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setBulkInviteResult(data);
+        showToast("Bulk invitations processed.", "success");
+        setBulkRows(Array.from({ length: 5 }, createEmptyRow));
+        fetchInvitations(true);
+      } else {
+        const data = await res.json();
+        showToast(data.detail || "Failed to send invitations.", "error");
+      }
+    } catch (err) {
+      showToast("Network error. Failed to send invitations.", "error");
     } finally {
       setIsSubmitting(false);
     }
@@ -555,6 +743,19 @@ export default function AdminDashboard() {
     }
   };
 
+  const formatActivityTime = (dateStr: string | null) => {
+    if (!dateStr) return "Never";
+    try {
+      const date = new Date(dateStr);
+      const isToday = new Date().toDateString() === date.toDateString();
+      const datePart = isToday ? 'Today' : date.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+      const timePart = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      return `${datePart} • ${timePart}`;
+    } catch {
+      return dateStr;
+    }
+  };
+
   const getStatusBadge = (statusStr: string) => {
     const s = statusStr.toUpperCase();
     if (s === "APPROVED") {
@@ -639,7 +840,7 @@ export default function AdminDashboard() {
 
       {/* ─── Navbar ─── */}
       <nav className="bg-white border-b border-[#e5e5e5] shadow-sm sticky top-0 z-45">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
             <div className="flex items-center gap-2.5">
               <div className="w-8 h-8 bg-[#CC2200] rounded flex items-center justify-center shadow-md">
@@ -649,6 +850,7 @@ export default function AdminDashboard() {
             </div>
             
             <div className="flex items-center gap-4">
+              <WorkspaceSwitcher />
               <span className="text-sm font-medium text-[#0a0a0a]/70">
                 {session?.user?.email || "superuser@example.com"}
               </span>
@@ -665,7 +867,7 @@ export default function AdminDashboard() {
       </nav>
 
       {/* ─── Dashboard Body ─── */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col md:flex-row gap-8">
+      <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col md:flex-row gap-8">
         
         {/* ─── Sidebar ─── */}
         <aside className="w-full md:w-64 flex-shrink-0">
@@ -674,7 +876,7 @@ export default function AdminDashboard() {
               {[
                 { icon: <Activity className="h-5 w-5" />, label: "Overview" },
                 { icon: <Users className="h-5 w-5" />, label: "User Management" },
-                { icon: <UserCheck className="h-5 w-5" />, label: "Investigator Applications" },
+                { icon: <UserCheck className="h-5 w-5" />, label: "Investigators" },
                 { icon: <ShieldAlert className="h-5 w-5" />, label: "System Alerts" },
                 { icon: <FileText className="h-5 w-5" />, label: "Audit Logs" },
                 { icon: <Settings className="h-5 w-5" />, label: "Configuration" },
@@ -713,7 +915,7 @@ export default function AdminDashboard() {
                   ? "Real-time portal activity and platform metrics."
                   : activeSidebarTab === "User Management"
                   ? "Manage approved security personnel, roles, and registrations."
-                  : activeSidebarTab === "Investigator Applications"
+                  : activeSidebarTab === "Investigators"
                   ? "Review, approve, or reject new forensic investigator registration requests."
                   : `View and manage system ${activeSidebarTab.toLowerCase()}.`
                 }
@@ -968,34 +1170,37 @@ export default function AdminDashboard() {
                   </div>
 
                   {/* Active Users Table */}
-                  <div className="overflow-x-auto min-h-[300px]">
+                  <div className="overflow-visible min-h-[300px] pb-24">
                     <table className="min-w-full divide-y divide-[#e5e5e5] text-left text-sm">
                       <thead className="bg-[#fafafa] font-semibold text-[#0a0a0a]/60 text-xs border-b border-[#e5e5e5]">
                         <tr>
-                          <th className="py-3 px-4 w-12 text-center">Avatar</th>
-                          <th className="py-3 px-4">Full Name</th>
-                          <th className="py-3 px-4">Email Address</th>
-                          <th className="py-3 px-4">Role</th>
-                          <th className="py-3 px-4">Organization / Dept</th>
-                          <th className="py-3 px-4 text-center">Status</th>
-                          <th className="py-3 px-4">Registered Date</th>
-                          <th className="py-3 px-4">Last Login</th>
-                          <th className="py-3 px-4 text-center">Actions</th>
+                          <th className="py-2 px-4 w-14 text-center">Avatar</th>
+                          <th className="py-2 px-4">Full Name</th>
+                          <th className="py-2 px-4">Email Address</th>
+                          <th className="py-2 px-4">Role</th>
+                          <th className="py-2 px-4">Organization / Dept</th>
+                          <th className="py-2 px-4 text-center">Status</th>
+                          <th className="py-2 px-4">Activity</th>
+                          <th className="py-2 px-4 text-center">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#f0f0f0] bg-white">
                         {usersLoading ? (
                           Array.from({ length: 5 }).map((_, i) => (
                             <tr key={i} className="animate-pulse">
-                              <td className="py-4 px-4"><div className="h-8 w-8 bg-slate-200 rounded-full mx-auto"></div></td>
-                              <td className="py-4 px-4"><div className="h-4 w-28 bg-slate-200 rounded"></div></td>
-                              <td className="py-4 px-4"><div className="h-4 w-40 bg-slate-200 rounded"></div></td>
-                              <td className="py-4 px-4"><div className="h-4 w-16 bg-slate-200 rounded"></div></td>
-                              <td className="py-4 px-4"><div className="h-4 w-32 bg-slate-200 rounded"></div></td>
-                              <td className="py-4 px-4"><div className="h-5 w-16 bg-slate-200 rounded-full mx-auto"></div></td>
-                              <td className="py-4 px-4"><div className="h-4 w-20 bg-slate-200 rounded"></div></td>
-                              <td className="py-4 px-4"><div className="h-4 w-20 bg-slate-200 rounded"></div></td>
-                              <td className="py-4 px-4"><div className="h-6 w-12 bg-slate-200 rounded mx-auto"></div></td>
+                              <td className="py-2 px-4"><div className="h-12 w-12 bg-slate-200 rounded-full mx-auto"></div></td>
+                              <td className="py-2 px-4"><div className="h-4 w-28 bg-slate-200 rounded"></div></td>
+                              <td className="py-2 px-4"><div className="h-4 w-40 bg-slate-200 rounded"></div></td>
+                              <td className="py-2 px-4"><div className="h-5 w-20 bg-slate-200 rounded-full"></div></td>
+                              <td className="py-2 px-4"><div className="h-4 w-32 bg-slate-200 rounded"></div></td>
+                              <td className="py-2 px-4"><div className="h-5 w-16 bg-slate-200 rounded-full mx-auto"></div></td>
+                              <td className="py-2 px-4">
+                                <div className="space-y-1.5">
+                                  <div className="h-3 w-20 bg-slate-200 rounded"></div>
+                                  <div className="h-3 w-24 bg-slate-200 rounded"></div>
+                                </div>
+                              </td>
+                              <td className="py-2 px-4"><div className="h-6 w-6 bg-slate-200 rounded mx-auto"></div></td>
                             </tr>
                           ))
                         ) : users.length === 0 ? (
@@ -1007,77 +1212,108 @@ export default function AdminDashboard() {
                         ) : (
                           users.map((user) => (
                             <tr key={user.id} className="hover:bg-[#fafafa]/50 transition-colors">
-                              <td className="py-3.5 px-4 text-center">
+                              <td className="py-2 px-4 text-center">
                                 {user.profile_picture ? (
                                   // eslint-disable-next-line @next/next/no-img-element
                                   <img 
                                     src={user.profile_picture} 
                                     alt={user.full_name} 
-                                    className="h-8 w-8 rounded-full object-cover border border-[#e5e5e5] mx-auto shadow-xs"
+                                    className="h-12 w-12 rounded-full object-cover border border-[#e5e5e5] mx-auto shadow-xs"
                                   />
                                 ) : (
-                                  <div className="h-8 w-8 rounded-full bg-slate-100 flex items-center justify-center font-bold text-xs text-blue-600 border border-slate-200 mx-auto shadow-xs">
+                                  <div className="h-12 w-12 rounded-full bg-slate-100 flex items-center justify-center font-bold text-sm text-blue-600 border border-slate-200 mx-auto shadow-xs">
                                     {user.full_name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}
                                   </div>
                                 )}
                               </td>
-                              <td className="py-3.5 px-4 font-semibold text-[#0a0a0a] whitespace-nowrap">
+                              <td className="py-2 px-4 font-semibold text-[#0a0a0a] whitespace-nowrap">
                                 {user.full_name}
                               </td>
-                              <td className="py-3.5 px-4 text-[#0a0a0a]/75 whitespace-nowrap">
-                                {user.email}
+                              <td className="py-2 px-4 text-[#0a0a0a]/75 whitespace-nowrap group relative">
+                                <span className="cursor-default">{user.email.length > 20 ? user.email.slice(0, 20) + "..." : user.email}</span>
+                                {user.email.length > 20 && (
+                                  <div className="absolute left-0 -top-8 hidden group-hover:block bg-gray-900 text-white text-xs px-2 py-1 rounded shadow-lg z-50 whitespace-nowrap">
+                                    {user.email}
+                                  </div>
+                                )}
                               </td>
-                              <td className="py-3.5 px-4 text-xs font-medium text-[#0a0a0a]/80">
-                                {user.role_name}
+                              <td className="py-2 px-4 whitespace-nowrap">
+                                {user.role_name.toUpperCase() === "ADMIN" ? (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700">ADMIN</span>
+                                ) : user.role_name.toUpperCase() === "INVESTIGATOR" ? (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700">INVESTIGATOR</span>
+                                ) : (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700">USER</span>
+                                )}
                               </td>
-                              <td className="py-3.5 px-4 text-[#0a0a0a]/75 truncate max-w-[150px]">
-                                {user.organization || "—"}
+                              <td className="py-2 px-4 text-xs">
+                                <div className="font-medium text-[#0a0a0a]/80 truncate max-w-[150px]">{user.organization || "—"}</div>
+                                {(user as any).department && (
+                                  <div className="text-[10px] text-[#0a0a0a]/50 truncate max-w-[150px]">{(user as any).department}</div>
+                                )}
                               </td>
-                              <td className="py-3.5 px-4 text-center whitespace-nowrap">
+                              <td className="py-2 px-4 text-center whitespace-nowrap">
                                 {getStatusBadge(user.status)}
                               </td>
-                              <td className="py-3.5 px-4 text-xs text-[#0a0a0a]/60">
-                                {formatDate(user.created_at)}
+                              <td className="py-2 px-4 whitespace-nowrap">
+                                <div className="text-xs text-[#0a0a0a]/60">
+                                  <span className="font-semibold block text-[#0a0a0a]/40 uppercase text-[10px] tracking-wider mb-0.5">Registered</span>
+                                  {formatDate(user.created_at)}
+                                </div>
+                                <div className="text-xs text-[#0a0a0a]/60 mt-1.5">
+                                  <span className="font-semibold block text-[#0a0a0a]/40 uppercase text-[10px] tracking-wider mb-0.5">Last Login</span>
+                                  {formatActivityTime(user.last_login)}
+                                </div>
                               </td>
-                              <td className="py-3.5 px-4 text-xs text-[#0a0a0a]/60">
-                                {formatDateTime(user.last_login)}
-                              </td>
-                              <td className="py-3.5 px-4 text-center whitespace-nowrap">
-                                <div className="flex items-center justify-center gap-1.5">
-                                  <button 
-                                    onClick={() => {
-                                      setSelectedUser(user);
-                                      setIsViewDrawerOpen(true);
-                                    }}
-                                    className="p-1 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                                    title="View Profile"
-                                  >
-                                    <Eye className="h-4.5 w-4.5" />
+                              <td className="py-2 px-4 text-right whitespace-nowrap">
+                                <div className="relative group inline-block text-left">
+                                  <button className="h-8 w-8 flex items-center justify-center text-slate-500 hover:text-slate-700 hover:bg-gray-100 active:bg-gray-200 rounded-full focus:outline-none transition-colors">
+                                    <MoreVertical className="h-4 w-4" />
                                   </button>
-                                  <button 
-                                    onClick={() => openEditModal(user)}
-                                    className="p-1 hover:text-amber-600 hover:bg-amber-50 rounded transition-colors"
-                                    title="Edit User"
-                                  >
-                                    <Edit2 className="h-4.5 w-4.5" />
-                                  </button>
-                                  <button 
-                                    onClick={() => handleDisableUser(user)}
-                                    className="p-1 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors"
-                                    title="Disable Account"
-                                  >
-                                    <UserX className="h-4.5 w-4.5" />
-                                  </button>
-                                  <button 
-                                    onClick={() => {
-                                      setUserToDelete(user);
-                                      setIsDeleteModalOpen(true);
-                                    }}
-                                    className="p-1 text-slate-400 hover:text-[#CC2200] hover:bg-[#CC2200]/5 rounded transition-colors"
-                                    title="Delete User"
-                                  >
-                                    <Trash2 className="h-4.5 w-4.5" />
-                                  </button>
+                                  <div className="absolute right-0 top-full mt-1 w-[220px] bg-white rounded-xl shadow-lg border border-[#e5e5e5] p-2 opacity-0 invisible origin-top-right transform scale-95 transition-all duration-150 ease-out group-hover:opacity-100 group-hover:visible group-hover:scale-100 z-[99] flex flex-col">
+                                    <button 
+                                      onClick={() => { setSelectedUser(user); setIsViewDrawerOpen(true); }}
+                                      className="flex items-center gap-3 px-3 h-10 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-lg w-full text-left transition-colors"
+                                    >
+                                      <Eye className="h-4 w-4 text-slate-500" /> View Profile
+                                    </button>
+                                    <button 
+                                      onClick={() => openEditModal(user)}
+                                      className="flex items-center gap-3 px-3 h-10 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-lg w-full text-left transition-colors"
+                                    >
+                                      <Edit2 className="h-4 w-4 text-slate-500" /> Edit User
+                                    </button>
+                                    <button 
+                                      onClick={() => showToast("Password reset link sent to user.", "success")}
+                                      className="flex items-center gap-3 px-3 h-10 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-lg w-full text-left transition-colors"
+                                    >
+                                      <Key className="h-4 w-4 text-slate-500" /> Reset Password
+                                    </button>
+                                    <button 
+                                      onClick={() => handleDisableUser(user)}
+                                      className="flex items-center gap-3 px-3 h-10 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-lg w-full text-left transition-colors"
+                                    >
+                                      <UserX className="h-4 w-4 text-slate-500" /> Suspend Account
+                                    </button>
+                                    
+                                    {user.role_name === "USER" && (
+                                      <button 
+                                        onClick={() => handleUpgradeUser(user.id)}
+                                        className="flex items-center gap-3 px-3 h-10 text-sm font-medium text-blue-700 hover:bg-blue-50 rounded-lg w-full text-left transition-colors"
+                                      >
+                                        <Plus className="h-4 w-4 text-blue-500" /> Upgrade to Investigator
+                                      </button>
+                                    )}
+                                    
+                                    <div className="h-px bg-slate-200 my-1 mx-1" />
+                                    
+                                    <button 
+                                      onClick={() => { setUserToDelete(user); setIsDeleteModalOpen(true); }}
+                                      className="flex items-center gap-3 px-3 h-10 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg w-full text-left transition-colors group/delete"
+                                    >
+                                      <Trash2 className="h-4 w-4 text-red-500 group-hover/delete:text-red-600" /> Delete User
+                                    </button>
+                                  </div>
                                 </div>
                               </td>
                             </tr>
@@ -1119,7 +1355,7 @@ export default function AdminDashboard() {
                   </div>
 
                 </div>
-              ) : (
+              ) : adminTab === "pending" ? (
                 /* Tab 2: Pending Approval Requests */
                 <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm animate-slide-in">
                   
@@ -1221,128 +1457,307 @@ export default function AdminDashboard() {
                   </div>
 
                 </div>
-              )}
+              ) : adminTab === "invitations" ? (
+                /* Tab 3: Invitations */
+                <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm animate-slide-in">
+                  <div className="px-6 py-4 border-b border-[#e5e5e5] flex flex-col sm:flex-row gap-4 items-center justify-between bg-slate-50/50 rounded-t-lg">
+                    <h2 className="font-bold text-lg text-[#0a0a0a]/80">Pending Invitations</h2>
+                    <button
+                      onClick={() => setIsInviteModalOpen(true)}
+                      className="px-4 py-2 bg-[#CC2200] hover:bg-red-700 text-white text-sm font-semibold rounded-md shadow-sm transition-colors flex items-center gap-2"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Invite Investigator
+                    </button>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm whitespace-nowrap">
+                      <thead className="bg-[#fafafa] text-[#0a0a0a]/50 uppercase text-[11px] font-bold tracking-wider border-b border-[#e5e5e5]">
+                        <tr>
+                          <th className="py-3 px-6">Name</th>
+                          <th className="py-3 px-6">Email</th>
+                          <th className="py-3 px-6">Status</th>
+                          <th className="py-3 px-6">Sent On</th>
+                          <th className="py-3 px-6">Expires On</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#f0f0f0] bg-white">
+                        {invitationsLoading ? (
+                          Array.from({ length: 3 }).map((_, i) => (
+                            <tr key={i} className="animate-pulse">
+                              <td className="py-4 px-6"><div className="h-4 w-32 bg-slate-200 rounded"></div></td>
+                              <td className="py-4 px-6"><div className="h-4 w-40 bg-slate-200 rounded"></div></td>
+                              <td className="py-4 px-6"><div className="h-4 w-20 bg-slate-200 rounded"></div></td>
+                              <td className="py-4 px-6"><div className="h-4 w-24 bg-slate-200 rounded"></div></td>
+                              <td className="py-4 px-6"><div className="h-4 w-24 bg-slate-200 rounded"></div></td>
+                            </tr>
+                          ))
+                        ) : invitations.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="py-12 text-center text-sm text-[#0a0a0a]/40 bg-white">
+                              No pending invitations found.
+                            </td>
+                          </tr>
+                        ) : (
+                          invitations.map((inv) => (
+                            <tr key={inv.id} className="hover:bg-[#fafafa]/50 transition-colors">
+                              <td className="py-3.5 px-6 font-semibold text-[#0a0a0a]">{inv.full_name}</td>
+                              <td className="py-3.5 px-6 text-[#0a0a0a]/75">{inv.email}</td>
+                              <td className="py-3.5 px-6">
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-50 text-amber-700 border border-amber-200/50">
+                                  {inv.status}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-6 text-xs text-[#0a0a0a]/60">{formatDate(inv.created_at)}</td>
+                              <td className="py-3.5 px-6 text-xs text-[#0a0a0a]/60">{formatDate(inv.expires_at)}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : null}
 
             </div>
           )}
 
-          {activeSidebarTab === "Investigator Applications" && (
-            <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm overflow-hidden">
-              <div className="px-6 py-4 border-b border-[#e5e5e5] bg-slate-50/50">
-                <h3 className="font-semibold text-lg">Applications Awaiting Verification</h3>
+          {activeSidebarTab === "Investigators" && (
+            <div className="flex flex-col gap-6 animate-slide-in">
+              {/* Header */}
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-6 rounded-lg border border-[#e5e5e5] shadow-sm">
+                <div>
+                  <h2 className="text-2xl font-bold text-[#0a0a0a]">Investigator Management</h2>
+                  <p className="text-sm text-[#0a0a0a]/60 mt-1">Manage active investigators, invite new investigators, and review pending verification requests.</p>
+                </div>
+                <button
+                  onClick={() => setIsBulkInviteModalOpen(true)}
+                  className="px-5 py-2.5 bg-[#CC2200] hover:bg-red-700 text-white font-semibold rounded-md shadow-sm transition-colors flex items-center gap-2 whitespace-nowrap"
+                >
+                  <Plus className="w-5 h-5" />
+                  Invite Investigators
+                </button>
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-[#e5e5e5] text-xs font-bold text-[#0a0a0a]/50 uppercase tracking-wider bg-[#fafafa]/80">
-                      <th className="py-3.5 px-6">Name</th>
-                      <th className="py-3.5 px-6">Email / Phone</th>
-                      <th className="py-3.5 px-6">Organization Details</th>
-                      <th className="py-3.5 px-6">Submitted Date</th>
-                      <th className="py-3.5 px-6">Credentials</th>
-                      <th className="py-3.5 px-6 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#e5e5e5]/80 text-sm">
-                    {applicationsLoading && !applicationsLoaded ? (
-                      [1, 2, 3].map((i) => (
-                        <tr key={i} className="animate-pulse">
-                          <td className="py-4 px-6"><div className="h-4 w-28 bg-slate-200 rounded"></div></td>
-                          <td className="py-4 px-6"><div className="h-4 w-40 bg-slate-200 rounded"></div></td>
-                          <td className="py-4 px-6"><div className="h-4 w-32 bg-slate-200 rounded"></div></td>
-                          <td className="py-4 px-6"><div className="h-4 w-20 bg-slate-200 rounded"></div></td>
-                          <td className="py-4 px-6"><div className="h-4 w-20 bg-slate-200 rounded"></div></td>
-                          <td className="py-4 px-6 text-right"><div className="h-6 w-36 bg-slate-200 rounded ml-auto"></div></td>
-                        </tr>
-                      ))
-                    ) : applications.length === 0 ? (
-                      <tr>
-                        <td colSpan={6} className="py-16 text-center text-sm text-[#0a0a0a]/40 bg-white">
-                          No pending investigator applications found.
-                        </td>
+
+              {/* Search & Filters */}
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="relative flex-1 min-w-[250px]">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#0a0a0a]/40" />
+                  <input
+                    type="text"
+                    placeholder="Search Investigator..."
+                    value={investigatorsSearch}
+                    onChange={(e) => setInvestigatorsSearch(e.target.value)}
+                    className="w-full pl-9 pr-4 py-2 border border-[#e5e5e5] rounded-md text-sm outline-none focus:border-[#CC2200] focus:ring-1 focus:ring-[#CC2200] transition-colors"
+                  />
+                </div>
+                <select
+                  value={investigatorsOrgFilter}
+                  onChange={(e) => setInvestigatorsOrgFilter(e.target.value)}
+                  className="px-3 py-2 border border-[#e5e5e5] rounded-md text-sm outline-none bg-white"
+                >
+                  <option value="">All Organizations</option>
+                  <option value="FBI">FBI</option>
+                  <option value="CIA">CIA</option>
+                </select>
+                <select
+                  value={investigatorsDeptFilter}
+                  onChange={(e) => setInvestigatorsDeptFilter(e.target.value)}
+                  className="px-3 py-2 border border-[#e5e5e5] rounded-md text-sm outline-none bg-white"
+                >
+                  <option value="">All Departments</option>
+                  <option value="Cyber">Cyber</option>
+                  <option value="Forensics">Forensics</option>
+                </select>
+                <select
+                  value={investigatorsStatusFilter}
+                  onChange={(e) => setInvestigatorsStatusFilter(e.target.value)}
+                  className="px-3 py-2 border border-[#e5e5e5] rounded-md text-sm outline-none bg-white"
+                >
+                  <option value="">All Statuses</option>
+                  <option value="ACTIVE">Active</option>
+                  <option value="SUSPENDED">Suspended</option>
+                </select>
+                <select
+                  value={investigatorsSort}
+                  onChange={(e) => setInvestigatorsSort(e.target.value)}
+                  className="px-3 py-2 border border-[#e5e5e5] rounded-md text-sm outline-none bg-white font-medium"
+                >
+                  <option value="name">Sort: Name</option>
+                  <option value="newest">Sort: Recently Joined</option>
+                  <option value="login">Sort: Last Login</option>
+                </select>
+              </div>
+
+              {/* Active Investigators Table */}
+              <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse whitespace-nowrap">
+                    <thead>
+                      <tr className="border-b border-[#e5e5e5] text-xs font-bold text-[#0a0a0a]/50 uppercase tracking-wider bg-[#fafafa]/80">
+                        <th className="py-3 px-6 w-12">Avatar</th>
+                        <th className="py-3 px-6">Full Name</th>
+                        <th className="py-3 px-6">Contact Info</th>
+                        <th className="py-3 px-6">Role & Status</th>
+                        <th className="py-3 px-6">Organization</th>
+                        <th className="py-3 px-6 text-right">Actions</th>
                       </tr>
-                    ) : (
-                      applications.map((app) => (
-                        <tr key={app.id} className="hover:bg-[#fafafa]/50 transition-colors">
-                          <td className="py-3.5 px-6 font-semibold text-[#0a0a0a]">
-                            <div className="flex items-center gap-3">
-                              {app.profile_picture ? (
-                                <img 
-                                  src={app.profile_picture} 
-                                  alt={app.full_name} 
-                                  className="w-8 h-8 rounded-full object-cover border border-[#e5e5e5]"
-                                />
+                    </thead>
+                    <tbody className="divide-y divide-[#e5e5e5]/80 text-sm">
+                      {investigatorsLoading && !investigatorsLoaded ? (
+                        [1, 2, 3].map((i) => (
+                          <tr key={i} className="animate-pulse">
+                            <td className="py-4 px-6"><div className="w-10 h-10 rounded-full bg-slate-200" /></td>
+                            <td className="py-4 px-6"><div className="h-4 w-32 bg-slate-200 rounded" /></td>
+                            <td className="py-4 px-6"><div className="h-4 w-40 bg-slate-200 rounded mb-1" /><div className="h-3 w-24 bg-slate-200 rounded" /></td>
+                            <td className="py-4 px-6"><div className="h-4 w-20 bg-slate-200 rounded" /></td>
+                            <td className="py-4 px-6"><div className="h-4 w-28 bg-slate-200 rounded" /></td>
+                            <td className="py-4 px-6 text-right"><div className="h-6 w-8 bg-slate-200 rounded ml-auto" /></td>
+                          </tr>
+                        ))
+                      ) : investigators.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="py-16 text-center bg-white">
+                            <div className="flex flex-col items-center justify-center max-w-sm mx-auto">
+                              <Users className="h-12 w-12 text-[#0a0a0a]/20 mb-4" />
+                              <h3 className="text-lg font-semibold text-[#0a0a0a]/80 mb-1">No active investigators</h3>
+                              <p className="text-sm text-[#0a0a0a]/50 mb-6 text-center">No investigators have been added yet. Invite investigators to start assigning cases.</p>
+                              <button
+                                onClick={() => setIsBulkInviteModalOpen(true)}
+                                className="px-4 py-2 bg-[#CC2200] hover:bg-red-700 text-white font-semibold rounded-md shadow-sm transition-colors flex items-center gap-2"
+                              >
+                                <Plus className="w-4 h-4" />
+                                Invite Investigators
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ) : (
+                        investigators.map((inv) => (
+                          <tr key={inv.id} className="hover:bg-[#fafafa]/50 transition-colors">
+                            <td className="py-3 px-6">
+                              {inv.profile_picture ? (
+                                <img src={inv.profile_picture} alt={inv.full_name} className="w-10 h-10 rounded-full object-cover border border-[#e5e5e5]" />
                               ) : (
-                                <div className="w-8 h-8 rounded-full bg-[#CC2200]/10 text-[#CC2200] flex items-center justify-center font-bold text-xs">
-                                  {app.full_name.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2)}
+                                <div className="w-10 h-10 rounded-full bg-[#CC2200]/10 text-[#CC2200] flex items-center justify-center font-bold text-sm">
+                                  {inv.full_name.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2)}
                                 </div>
                               )}
-                              <span>{app.full_name}</span>
-                            </div>
-                          </td>
-                          <td className="py-3.5 px-6 text-[#0a0a0a]/75">
-                            <div>{app.email}</div>
-                            {app.phone && <div className="text-xs text-[#0a0a0a]/40 mt-0.5">{app.phone}</div>}
-                          </td>
-                          <td className="py-3.5 px-6 text-[#0a0a0a]/75">
-                            <div className="font-semibold text-xs">{app.organization}</div>
-                            <div className="text-xs text-[#0a0a0a]/50 mt-0.5">{app.department} • {app.designation}</div>
-                            <div className="text-[10px] text-slate-400 mt-0.5">Badge ID: {app.employee_id}</div>
-                          </td>
-                          <td className="py-3.5 px-6 text-xs text-[#0a0a0a]/60">
-                            {formatDate(app.applied_date)}
-                          </td>
-                          <td className="py-3.5 px-6">
-                            {app.government_id_path ? (
-                              <a 
-                                href={app.government_id_path} 
-                                target="_blank" 
-                                rel="noreferrer"
-                                className="inline-flex items-center gap-1.5 text-xs font-bold text-[#CC2200] hover:underline"
-                              >
-                                <Eye className="w-3.5 h-3.5" />
-                                View ID Document
-                              </a>
-                            ) : (
-                              <span className="text-xs text-[#0a0a0a]/40">No Document</span>
-                            )}
-                          </td>
-                          <td className="py-3.5 px-6 text-right whitespace-nowrap">
-                            <div className="flex items-center justify-end gap-2">
-                              <button 
-                                onClick={() => {
-                                  setSelectedApplication(app);
-                                  setIsAppViewDrawerOpen(true);
-                                }}
-                                className="text-xs font-semibold px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded transition-colors shadow-xs"
-                              >
-                                View Details
+                            </td>
+                            <td className="py-3 px-6 font-semibold text-[#0a0a0a]">{inv.full_name}</td>
+                            <td className="py-3 px-6">
+                              <div className="text-[#0a0a0a]/80">{inv.email}</div>
+                              {inv.phone && <div className="text-xs text-[#0a0a0a]/50 mt-0.5">{inv.phone}</div>}
+                            </td>
+                            <td className="py-3 px-6">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-blue-50 text-blue-700 mb-1">Investigator</span>
+                              <br />
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${inv.status === "ACTIVE" ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}>
+                                {inv.status}
+                              </span>
+                            </td>
+                            <td className="py-3 px-6">
+                              <div className="text-sm font-medium">{inv.organization || "-"}</div>
+                              <div className="text-xs text-[#0a0a0a]/50 mt-0.5">{inv.department || "-"}</div>
+                            </td>
+                            <td className="py-3 px-6 text-right relative">
+                              <button onClick={() => openEditModal(inv)} className="text-xs font-semibold px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded transition-colors shadow-xs">
+                                Edit Investigator
                               </button>
-                              <button 
-                                onClick={() => {
-                                  setAppToApprove(app);
-                                  setIsAppApproveModalOpen(true);
-                                }}
-                                className="text-xs font-semibold px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded transition-colors shadow-xs"
-                              >
-                                Approve
-                              </button>
-                              <button 
-                                onClick={() => {
-                                  setAppToReject(app);
-                                  setIsAppRejectModalOpen(true);
-                                }}
-                                className="text-xs font-semibold px-3 py-1.5 bg-[#CC2200] hover:bg-[#CC2200]/90 text-white rounded transition-colors shadow-xs"
-                              >
-                                Reject
-                              </button>
-                            </div>
-                          </td>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Pending Verification Collapsible */}
+              <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm overflow-hidden">
+                <button
+                  onClick={() => setIsPendingSectionOpen(!isPendingSectionOpen)}
+                  className="w-full px-6 py-4 flex items-center justify-between bg-slate-50/50 hover:bg-slate-50 transition-colors"
+                >
+                  <div className="flex items-center gap-3">
+                    <h3 className="font-semibold text-lg">Pending Verification</h3>
+                    <span className="bg-amber-100 text-amber-800 text-xs font-bold px-2 py-0.5 rounded-full">{applications.length}</span>
+                  </div>
+                  {isPendingSectionOpen ? <ChevronDown className="w-5 h-5 text-[#0a0a0a]/50" /> : <ChevronRight className="w-5 h-5 text-[#0a0a0a]/50" />}
+                </button>
+                
+                {isPendingSectionOpen && (
+                  <div className="border-t border-[#e5e5e5] overflow-x-auto">
+                    <table className="w-full text-left border-collapse whitespace-nowrap">
+                      <thead>
+                        <tr className="border-b border-[#e5e5e5] text-xs font-bold text-[#0a0a0a]/50 uppercase tracking-wider bg-[#fafafa]/80">
+                          <th className="py-3.5 px-6">Name</th>
+                          <th className="py-3.5 px-6">Organization</th>
+                          <th className="py-3.5 px-6">Department</th>
+                          <th className="py-3.5 px-6">Submitted Date</th>
+                          <th className="py-3.5 px-6">Govt ID Status</th>
+                          <th className="py-3.5 px-6 text-right">Actions</th>
                         </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
+                      </thead>
+                      <tbody className="divide-y divide-[#e5e5e5]/80 text-sm">
+                        {applicationsLoading && !applicationsLoaded ? (
+                          [1, 2].map((i) => (
+                            <tr key={i} className="animate-pulse">
+                              <td colSpan={6} className="py-4 px-6"><div className="h-4 w-full bg-slate-200 rounded"></div></td>
+                            </tr>
+                          ))
+                        ) : applications.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="py-12 text-center text-sm text-[#0a0a0a]/40 bg-white">
+                              No pending investigator verification requests.
+                            </td>
+                          </tr>
+                        ) : (
+                          applications.map((app) => (
+                            <tr key={app.id} className="hover:bg-[#fafafa]/50 transition-colors">
+                              <td className="py-3.5 px-6 font-semibold text-[#0a0a0a]">
+                                <div className="flex items-center gap-3">
+                                  {app.profile_picture ? (
+                                    <img src={app.profile_picture} alt={app.full_name} className="w-8 h-8 rounded-full object-cover border border-[#e5e5e5]" />
+                                  ) : (
+                                    <div className="w-8 h-8 rounded-full bg-[#CC2200]/10 text-[#CC2200] flex items-center justify-center font-bold text-xs">
+                                      {app.full_name.substring(0, 2).toUpperCase()}
+                                    </div>
+                                  )}
+                                  <div>
+                                    <div>{app.full_name}</div>
+                                    <div className="text-xs text-[#0a0a0a]/50 font-normal">{app.email}</div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="py-3.5 px-6 text-[#0a0a0a]/80">{app.organization}</td>
+                              <td className="py-3.5 px-6 text-[#0a0a0a]/80">{app.department}</td>
+                              <td className="py-3.5 px-6 text-xs text-[#0a0a0a]/60">{formatDate(app.applied_date)}</td>
+                              <td className="py-3.5 px-6">
+                                {app.government_id_path ? (
+                                  <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600">
+                                    <CheckCircle className="w-3.5 h-3.5" /> Uploaded
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-600">
+                                    <AlertCircle className="w-3.5 h-3.5"/> Missing
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3.5 px-6 text-right">
+                                <div className="flex items-center justify-end gap-2">
+                                  <button onClick={() => { setSelectedApplication(app); setIsAppViewDrawerOpen(true); }} className="text-xs font-semibold px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded transition-colors">View Details</button>
+                                  <button onClick={() => { setAppToApprove(app); setIsAppApproveModalOpen(true); }} className="text-xs font-semibold px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded transition-colors">Approve</button>
+                                  <button onClick={() => { setAppToReject(app); setIsAppRejectModalOpen(true); }} className="text-xs font-semibold px-3 py-1.5 bg-[#CC2200] hover:bg-[#CC2200]/90 text-white rounded transition-colors">Reject</button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -1375,6 +1790,190 @@ export default function AdminDashboard() {
       </div>
 
       {/* ──────────────── MODALS & DRAWERS ──────────────── */}
+
+      {/* Bulk Invite Modal */}
+      {isBulkInviteModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setIsBulkInviteModalOpen(false)} />
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl overflow-hidden relative animate-scale-up max-h-[90vh] flex flex-col">
+            <div className="px-6 py-4 border-b border-[#e5e5e5] flex justify-between items-center bg-slate-50/50">
+              <div>
+                <h3 className="text-lg font-bold">Invite Investigators</h3>
+                <p className="text-xs text-[#0a0a0a]/60 mt-1">Enter details for one or more investigators to send bulk invitations.</p>
+              </div>
+              <button onClick={() => { setIsBulkInviteModalOpen(false); setBulkInviteResult(null); }} className="text-[#0a0a0a]/40 hover:text-[#0a0a0a]">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1 bg-[#fafafa]">
+              {bulkInviteResult ? (
+                <div className="bg-white p-6 rounded-lg border border-[#e5e5e5] text-center max-w-sm mx-auto">
+                  <div className="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <CheckCircle className="w-6 h-6" />
+                  </div>
+                  <h4 className="font-bold text-lg mb-2">Invitations Processed</h4>
+                  <div className="space-y-2 text-sm text-[#0a0a0a]/80 mb-6">
+                    <div className="flex justify-between"><span>Sent:</span><span className="font-bold text-emerald-600">{bulkInviteResult.sent}</span></div>
+                    {bulkInviteResult.skipped_existing > 0 && <div className="flex justify-between"><span>Skipped (Existing Users):</span><span className="font-bold text-amber-600">{bulkInviteResult.skipped_existing}</span></div>}
+                    {bulkInviteResult.skipped_pending > 0 && <div className="flex justify-between"><span>Skipped (Already Pending):</span><span className="font-bold text-amber-600">{bulkInviteResult.skipped_pending}</span></div>}
+                    {bulkInviteResult.skipped_duplicate > 0 && <div className="flex justify-between"><span>Skipped (Duplicates in List):</span><span className="font-bold text-amber-600">{bulkInviteResult.skipped_duplicate}</span></div>}
+                  </div>
+                  <button onClick={() => { setIsBulkInviteModalOpen(false); setBulkInviteResult(null); }} className="w-full px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded font-medium transition-colors">
+                    Close
+                  </button>
+                </div>
+              ) : (
+                <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm overflow-hidden">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-[#e5e5e5] bg-slate-50 text-xs font-bold text-[#0a0a0a]/60 uppercase tracking-wider">
+                        <th className="py-3 px-4">Full Name</th>
+                        <th className="py-3 px-4">Official Email</th>
+                        <th className="py-3 px-4">Phone Number (Optional)</th>
+                        <th className="py-3 px-4 w-12 text-center"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#e5e5e5]">
+                      {bulkRows.map((row) => (
+                        <tr key={row.id}>
+                          <td className="p-2">
+                            <input
+                              type="text"
+                              placeholder="Jane Doe"
+                              value={row.full_name}
+                              onChange={(e) => {
+                                setBulkRows(prev => prev.map(r => r.id === row.id ? { ...r, full_name: e.target.value } : r));
+                              }}
+                              className="w-full px-3 py-2 border border-transparent hover:border-[#e5e5e5] focus:border-[#CC2200] focus:ring-1 focus:ring-[#CC2200] rounded-md text-sm outline-none bg-transparent transition-all"
+                            />
+                          </td>
+                          <td className="p-2">
+                            <input
+                              type="email"
+                              placeholder="jane@agency.gov"
+                              value={row.email}
+                              onChange={(e) => {
+                                setBulkRows(prev => prev.map(r => r.id === row.id ? { ...r, email: e.target.value } : r));
+                              }}
+                              className={`w-full px-3 py-2 border border-transparent hover:border-[#e5e5e5] focus:border-[#CC2200] focus:ring-1 focus:ring-[#CC2200] rounded-md text-sm outline-none bg-transparent transition-all ${row.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email) ? 'border-red-300 bg-red-50 text-red-900 focus:border-red-500 focus:ring-red-500' : ''}`}
+                            />
+                          </td>
+                          <td className="p-2">
+                            <input
+                              type="text"
+                              placeholder="+1 234 567 8900"
+                              value={row.phone}
+                              onChange={(e) => {
+                                setBulkRows(prev => prev.map(r => r.id === row.id ? { ...r, phone: e.target.value } : r));
+                              }}
+                              className="w-full px-3 py-2 border border-transparent hover:border-[#e5e5e5] focus:border-[#CC2200] focus:ring-1 focus:ring-[#CC2200] rounded-md text-sm outline-none bg-transparent transition-all"
+                            />
+                          </td>
+                          <td className="p-2 text-center">
+                            <button
+                              onClick={() => {
+                                setBulkRows(prev => {
+                                  const filtered = prev.filter(r => r.id !== row.id);
+                                  return filtered.length ? filtered : [createEmptyRow()];
+                                });
+                              }}
+                              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                              title="Remove Row"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className="p-3 border-t border-[#e5e5e5] bg-slate-50">
+                    <button
+                      onClick={() => setBulkRows(prev => [...prev, createEmptyRow()])}
+                      className="text-sm font-semibold text-[#CC2200] hover:text-red-700 flex items-center gap-1.5 px-3 py-1.5 rounded hover:bg-red-50 transition-colors"
+                    >
+                      <Plus className="w-4 h-4" /> Add Another Row
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+            {!bulkInviteResult && (
+              <div className="px-6 py-4 border-t border-[#e5e5e5] bg-white flex justify-end items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsBulkInviteModalOpen(false)}
+                  className="px-4 py-2 font-semibold text-slate-600 hover:bg-slate-100 rounded-md transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleBulkInvite}
+                  disabled={isSubmitting || bulkRows.filter(r => r.full_name.trim() && r.email.trim() && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r.email)).length === 0}
+                  className="px-6 py-2 bg-[#CC2200] hover:bg-red-700 text-white font-semibold rounded-md shadow-sm transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  Send Invitations ({bulkRows.filter(r => r.full_name.trim() && r.email.trim() && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r.email)).length})
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Invite Modal */}
+      {isInviteModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setIsInviteModalOpen(false)} />
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden relative animate-scale-up">
+            <div className="px-6 py-4 border-b border-[#e5e5e5] flex justify-between items-center bg-slate-50/50">
+              <h3 className="text-lg font-bold">Invite Investigator</h3>
+              <button onClick={() => setIsInviteModalOpen(false)} className="text-[#0a0a0a]/40 hover:text-[#0a0a0a]">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleInviteSubmit} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-[#0a0a0a]/80 mb-1.5">Full Name</label>
+                <input
+                  type="text"
+                  required
+                  className="w-full px-3 py-2 bg-white border border-[#e5e5e5] rounded-md focus:outline-none focus:ring-2 focus:ring-[#CC2200]/20 focus:border-[#CC2200] transition-colors"
+                  value={inviteForm.full_name}
+                  onChange={e => setInviteForm({ ...inviteForm, full_name: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-[#0a0a0a]/80 mb-1.5">Email Address</label>
+                <input
+                  type="email"
+                  required
+                  className="w-full px-3 py-2 bg-white border border-[#e5e5e5] rounded-md focus:outline-none focus:ring-2 focus:ring-[#CC2200]/20 focus:border-[#CC2200] transition-colors"
+                  value={inviteForm.email}
+                  onChange={e => setInviteForm({ ...inviteForm, email: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-[#0a0a0a]/80 mb-1.5">Phone Number (Optional)</label>
+                <input
+                  type="text"
+                  className="w-full px-3 py-2 bg-white border border-[#e5e5e5] rounded-md focus:outline-none focus:ring-2 focus:ring-[#CC2200]/20 focus:border-[#CC2200] transition-colors"
+                  value={inviteForm.phone}
+                  onChange={e => setInviteForm({ ...inviteForm, phone: e.target.value })}
+                />
+              </div>
+              <div className="pt-4 flex justify-end gap-3 border-t border-[#e5e5e5]">
+                <button type="button" onClick={() => setIsInviteModalOpen(false)} className="px-4 py-2 text-sm font-semibold text-[#0a0a0a]/60 hover:bg-slate-100 rounded transition-colors">
+                  Cancel
+                </button>
+                <button type="submit" disabled={isSubmitting} className="px-4 py-2 bg-[#CC2200] hover:bg-red-700 text-white text-sm font-semibold rounded shadow-sm transition-colors flex items-center gap-2">
+                  {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send Invitation"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* 1. View User details side drawer */}
       {isViewDrawerOpen && selectedUser && (
