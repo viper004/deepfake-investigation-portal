@@ -798,7 +798,7 @@ export default function AdminDashboard() {
       <div className="min-h-screen bg-[#fafafa] flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           <Loader2 className="h-8 w-8 animate-spin text-[#CC2200]" />
-          <p className="text-sm font-medium text-[#0a0a0a]/50">Loading DeepGuard Admin portal...</p>
+          <p className="text-sm font-medium text-[#0a0a0a]/50">Loading Sentinel AI Admin portal...</p>
         </div>
       </div>
     );
@@ -846,7 +846,7 @@ export default function AdminDashboard() {
               <div className="w-8 h-8 bg-[#CC2200] rounded flex items-center justify-center shadow-md">
                 <ShieldAlert className="h-5 w-5 text-white" />
               </div>
-              <span className="font-bold text-lg tracking-tight">DeepGuard Admin</span>
+              <span className="font-bold text-lg tracking-tight">Sentinel AI Admin</span>
             </div>
             
             <div className="flex items-center gap-4">

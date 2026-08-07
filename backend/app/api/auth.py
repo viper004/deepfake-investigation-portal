@@ -1,17 +1,22 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Form, File, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 import os
 import shutil
 import uuid
+import secrets
+import hashlib
+import re
+from pydantic import BaseModel
 
 from app.database.database import SessionLocal
 from app.schemas.user import UserCreate, UserResponse, UserLogin
 from app.services.user import get_user_by_email, create_user
 from app.utils.auth import verify_password, create_access_token, get_password_hash
-from app.models.user import User, InvestigatorProfile, InvestigatorInvitation
+from app.models.user import User, InvestigatorProfile, InvestigatorInvitation, EmailVerification
+from app.services.email_service import send_otp_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -22,6 +27,148 @@ def get_db():
     finally:
         db.close()
 
+# OTP Helpers & Schemas
+def hash_otp(otp: str) -> str:
+    salt = "SENTINEL_AI_OTP_SALT_2026"
+    return hashlib.sha256((otp + salt).encode()).hexdigest()
+
+def cleanup_expired_otps(db: Session):
+    try:
+        now = datetime.now(timezone.utc)
+        db.query(EmailVerification).filter(EmailVerification.expires_at < now).delete(synchronize_session=False)
+        db.commit()
+    except Exception:
+        db.rollback()
+
+class OTPRequestSchema(BaseModel):
+    email: str
+
+class VerifyOTPRequestSchema(BaseModel):
+    email: str
+    otp: str
+
+@router.post("/send-email-otp")
+async def send_email_otp(data: OTPRequestSchema, db: Session = Depends(get_db)):
+    email = data.email.strip().lower()
+    
+    # 1. Validate email format
+    email_regex = r"^[\w\.-]+@[\w\.-]+\.\w+$"
+    if not re.match(email_regex, email):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid email address format."
+        )
+    
+    # 2. Check whether the email is already registered
+    existing_user = get_user_by_email(db, email)
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="An account with this email already exists."
+        )
+
+    # 3. Cleanup expired OTPs
+    cleanup_expired_otps(db)
+
+    # 4. Check rate limit: Maximum 3 OTP requests per hour for the same email
+    one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+    recent_requests = db.query(EmailVerification).filter(
+        EmailVerification.email == email,
+        EmailVerification.created_at >= one_hour_ago
+    ).count()
+
+    if recent_requests >= 3:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Maximum 3 OTP requests allowed per hour. Please try again later."
+        )
+
+    # Invalidate previous unverified OTPs for this email
+    db.query(EmailVerification).filter(
+        EmailVerification.email == email,
+        EmailVerification.verified == False
+    ).delete(synchronize_session=False)
+    db.commit()
+
+    # 5. Generate cryptographically secure random 6-digit OTP
+    otp_code = f"{secrets.randbelow(900000) + 100000}"
+    otp_hashed = hash_otp(otp_code)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+
+    # 6. Store in database
+    verification_entry = EmailVerification(
+        email=email,
+        otp_hash=otp_hashed,
+        expires_at=expires_at,
+        attempt_count=0,
+        verified=False
+    )
+    db.add(verification_entry)
+    db.commit()
+
+    # 7. Send OTP email
+    await send_otp_email(email, otp_code)
+
+    return {"message": "Verification code sent to your email."}
+
+@router.post("/verify-email-otp")
+def verify_email_otp(data: VerifyOTPRequestSchema, db: Session = Depends(get_db)):
+    email = data.email.strip().lower()
+    otp_code = data.otp.strip()
+
+    if not otp_code or len(otp_code) != 6 or not otp_code.isdigit():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OTP must be a 6-digit number."
+        )
+
+    cleanup_expired_otps(db)
+
+    record = db.query(EmailVerification).filter(
+        EmailVerification.email == email,
+        EmailVerification.verified == False
+    ).order_by(EmailVerification.id.desc()).first()
+
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Verification code has expired or is invalid."
+        )
+
+    now = datetime.now(timezone.utc)
+    record_expires = record.expires_at.replace(tzinfo=timezone.utc) if record.expires_at.tzinfo is None else record.expires_at
+    if record_expires < now:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Verification code has expired or is invalid."
+        )
+
+    if record.attempt_count >= 5:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Maximum verification attempts exceeded. Please request a new verification code."
+        )
+
+    # Increment attempt count
+    record.attempt_count += 1
+    db.commit()
+
+    # Check OTP hash
+    if hash_otp(otp_code) == record.otp_hash:
+        record.verified = True
+        record.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        return {"message": "Email verified successfully."}
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid verification code."
+        )
+
+@router.post("/resend-email-otp")
+async def resend_email_otp(data: OTPRequestSchema, db: Session = Depends(get_db)):
+    return await send_email_otp(data, db)
+
 @router.post("/register/user", status_code=status.HTTP_201_CREATED)
 def register_user(
     full_name: str = Form(...),
@@ -31,10 +178,23 @@ def register_user(
     profile_picture_file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
-    if get_user_by_email(db, email):
+    email_clean = email.strip().lower()
+    if get_user_by_email(db, email_clean):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
+            detail="An account with this email already exists."
+        )
+
+    # Check if email is verified
+    verification_record = db.query(EmailVerification).filter(
+        EmailVerification.email == email_clean,
+        EmailVerification.verified == True
+    ).first()
+
+    if not verification_record:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please verify your email address before completing registration."
         )
     
     hashed_password = get_password_hash(password)
@@ -50,14 +210,19 @@ def register_user(
     
     db_user = User(
         full_name=full_name,
-        email=email,
+        email=email_clean,
         password=hashed_password,
         phone=phone,
         role_id=3,  # USER
         status="ACTIVE",
-        profile_picture=profile_pic_url
+        profile_picture=profile_pic_url,
+        email_verified=True,
+        email_verified_at=datetime.now(timezone.utc)
     )
     db.add(db_user)
+    
+    # Delete OTP records for this email after successful registration
+    db.query(EmailVerification).filter(EmailVerification.email == email_clean).delete(synchronize_session=False)
     db.commit()
     db.refresh(db_user)
     

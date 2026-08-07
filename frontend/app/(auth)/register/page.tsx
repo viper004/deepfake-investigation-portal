@@ -45,6 +45,132 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const [bgImage, setBgImage] = useState("/images/auth/cyber2.png");
 
+  // OTP Verification States
+  const [isEmailVerified, setIsEmailVerified] = useState(false);
+  const [otpSending, setOtpSending] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCode, setOtpCode] = useState("");
+  const [otpVerifying, setOtpVerifying] = useState(false);
+  const [otpError, setOtpError] = useState("");
+  const [otpSuccess, setOtpSuccess] = useState("");
+  const [otpCountdown, setOtpCountdown] = useState(0); // 300s (5 min)
+  const [resendCountdown, setResendCountdown] = useState(0); // 60s
+  const [toasts, setToasts] = useState<Array<{ id: number; message: string; type: "success" | "error" }>>([]);
+
+  const showToast = (message: string, type: "success" | "error") => {
+    const id = Date.now();
+    setToasts((prev) => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4500);
+  };
+
+  useEffect(() => {
+    let interval: any = null;
+    if (otpCountdown > 0 || resendCountdown > 0) {
+      interval = setInterval(() => {
+        setOtpCountdown((prev) => (prev > 0 ? prev - 1 : 0));
+        setResendCountdown((prev) => (prev > 0 ? prev - 1 : 0));
+      }, 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [otpCountdown, resendCountdown]);
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  const handleSendOTP = async () => {
+    const email = formData.email.trim();
+    const emailRegex = /^[\w\.-]+@[\w\.-]+\.\w+$/;
+    if (!email || !emailRegex.test(email)) {
+      setOtpError("Please enter a valid email address.");
+      showToast("Please enter a valid email address.", "error");
+      return;
+    }
+
+    try {
+      setOtpSending(true);
+      setOtpError("");
+      setOtpSuccess("");
+
+      const res = await fetch("http://127.0.0.1:8000/api/v1/auth/send-email-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        const errorDetail = data.detail || "Failed to send verification code.";
+        setOtpError(errorDetail);
+        showToast(errorDetail, "error");
+        return;
+      }
+
+      setOtpSent(true);
+      setOtpCountdown(300); // 5 minutes
+      setResendCountdown(60); // 60 seconds
+      setOtpSuccess("Verification code sent to your email.");
+      showToast("Verification code sent to your email.", "success");
+    } catch (err) {
+      setOtpError("Error sending verification code. Please try again.");
+      showToast("Error sending verification code.", "error");
+    } finally {
+      setOtpSending(false);
+    }
+  };
+
+  const handleVerifyOTP = async () => {
+    const email = formData.email.trim();
+    if (!otpCode || otpCode.length !== 6) {
+      setOtpError("Please enter a valid 6-digit verification code.");
+      showToast("Please enter a 6-digit OTP code.", "error");
+      return;
+    }
+
+    try {
+      setOtpVerifying(true);
+      setOtpError("");
+      setOtpSuccess("");
+
+      const res = await fetch("http://127.0.0.1:8000/api/v1/auth/verify-email-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, otp: otpCode.trim() }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        const errorDetail = data.detail || "Invalid verification code.";
+        setOtpError(errorDetail);
+        showToast(errorDetail, "error");
+        return;
+      }
+
+      setIsEmailVerified(true);
+      setOtpSent(false);
+      setOtpSuccess("Email verified successfully!");
+      showToast("Email verified successfully!", "success");
+    } catch (err) {
+      setOtpError("Network error verifying code. Please try again.");
+      showToast("Error verifying OTP.", "error");
+    } finally {
+      setOtpVerifying(false);
+    }
+  };
+
+  const handleResendOTP = async () => {
+    if (resendCountdown > 0) return;
+    await handleSendOTP();
+  };
+
   useEffect(() => {
     const images = [
       "/images/auth/cyber1.png",
@@ -67,6 +193,7 @@ export default function RegisterPage() {
           if (data.email) {
             setFormData(prev => ({ ...prev, email: data.email, full_name: data.full_name || prev.full_name }));
             setIsUpgrade(!!data.is_upgrade);
+            setIsEmailVerified(true); // Pre-verified via secure invitation token
           } else {
             setError(data.detail || "Invalid token");
           }
@@ -81,6 +208,13 @@ export default function RegisterPage() {
   }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.name === "email") {
+      setIsEmailVerified(false);
+      setOtpSent(false);
+      setOtpCode("");
+      setOtpError("");
+      setOtpSuccess("");
+    }
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
@@ -89,6 +223,13 @@ export default function RegisterPage() {
     setLoading(true);
     setError("");
     setSuccessMsg("");
+
+    if (flow === "user" && !isEmailVerified) {
+      setError("Please verify your email address before completing registration.");
+      showToast("Please verify your email address first.", "error");
+      setLoading(false);
+      return;
+    }
 
     if (!isUpgrade && formData.password !== formData.confirm_password) {
       setError("Passwords do not match");
@@ -147,11 +288,13 @@ export default function RegisterPage() {
       
       if (!res.ok) {
         setError(data.detail || "Registration failed");
+        showToast(data.detail || "Registration failed", "error");
         setLoading(false);
         return;
       }
       
       setSuccessMsg(data.message);
+      showToast(data.message || "Registration completed successfully!", "success");
       
       if (flow === "user") {
         setTimeout(() => {
@@ -160,6 +303,7 @@ export default function RegisterPage() {
       }
     } catch (err) {
       setError("An unexpected error occurred. Please try again.");
+      showToast("An unexpected error occurred.", "error");
     } finally {
       setLoading(false);
     }
@@ -192,7 +336,7 @@ export default function RegisterPage() {
           </h3>
           <p className="text-white/70 leading-relaxed max-w-md">
             {flow === "investigator" 
-              ? "Apply for professional access to DeepGuard's forensic tools and AI-powered media analysis platform."
+              ? "Apply for professional access to Sentinel AI's forensic tools and AI-powered media analysis platform."
               : "Submit media scans, track deepfake case files, and secure metadata provenance reports instantly."
             }
           </p>
@@ -209,7 +353,7 @@ export default function RegisterPage() {
                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
               </svg>
             </div>
-            <span className="font-bold text-lg tracking-tight">DeepGuard</span>
+            <span className="font-bold text-lg tracking-tight">Sentinel AI</span>
           </div>
 
           {successMsg ? (
@@ -282,26 +426,166 @@ export default function RegisterPage() {
                     </div>
                   </div>
 
-                  {/* Email */}
+                  {/* Email & OTP Verification */}
                   <div className="sm:col-span-2">
-                    <label className="block text-sm font-semibold text-[#0a0a0a]/80 mb-1.5">
-                      Email address *
+                    <label className="block text-sm font-semibold text-[#0a0a0a]/80 mb-1.5 flex justify-between items-center">
+                      <span>Email address *</span>
+                      {isEmailVerified && (
+                        <span className="text-xs text-emerald-600 font-bold flex items-center gap-1">
+                          <CheckCircle className="h-3.5 w-3.5" />
+                          Verified
+                        </span>
+                      )}
                     </label>
-                    <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <Mail className="h-5 w-5 text-[#0a0a0a]/40" />
+
+                    {isEmailVerified ? (
+                      <div className="flex items-center gap-2">
+                        <div className="relative flex-1">
+                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <Mail className="h-5 w-5 text-emerald-600" />
+                          </div>
+                          <input
+                            type="email"
+                            name="email"
+                            required
+                            readOnly={true}
+                            value={formData.email}
+                            className="block w-full pl-10 pr-24 bg-emerald-50/60 border border-emerald-300 text-emerald-950 font-semibold rounded-md py-2.5 sm:text-sm outline-none cursor-not-allowed"
+                          />
+                          <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                            <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded flex items-center gap-1 border border-emerald-300">
+                              ✅ Email Verified
+                            </span>
+                          </div>
+                        </div>
+                        {!token && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsEmailVerified(false);
+                              setOtpSent(false);
+                              setOtpCode("");
+                              setOtpError("");
+                              setOtpSuccess("");
+                            }}
+                            className="px-3 py-2.5 text-xs text-[#0a0a0a]/60 hover:text-[#CC2200] font-semibold border border-slate-200 hover:border-[#CC2200] rounded-md transition-colors bg-white shadow-sm"
+                          >
+                            Edit Email
+                          </button>
+                        )}
                       </div>
-                      <input
-                        type="email"
-                        name="email"
-                        required
-                        readOnly={!!token}
-                        value={formData.email}
-                        onChange={handleChange}
-                        className={`block w-full pl-10 border border-[#e5e5e5] rounded-md py-2.5 text-[#0a0a0a] focus:ring-1 focus:ring-[#CC2200] focus:border-[#CC2200] sm:text-sm transition-colors outline-none ${token ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : 'bg-[#fafafa]'}`}
-                        placeholder={flow === "investigator" ? "jane.doe@agency.gov" : "jane.doe@email.com"}
-                      />
-                    </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                          <div className="relative flex-1">
+                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                              <Mail className="h-5 w-5 text-[#0a0a0a]/40" />
+                            </div>
+                            <input
+                              type="email"
+                              name="email"
+                              required
+                              readOnly={!!token || otpSent}
+                              value={formData.email}
+                              onChange={handleChange}
+                              className={`block w-full pl-10 border border-[#e5e5e5] rounded-md py-2.5 text-[#0a0a0a] focus:ring-1 focus:ring-[#CC2200] focus:border-[#CC2200] sm:text-sm transition-colors outline-none ${token || otpSent ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : 'bg-[#fafafa]'}`}
+                              placeholder={flow === "investigator" ? "jane.doe@agency.gov" : "jane.doe@email.com"}
+                            />
+                          </div>
+                          {!token && flow === "user" && (
+                            <button
+                              type="button"
+                              disabled={otpSending || !formData.email || otpSent}
+                              onClick={handleSendOTP}
+                              className="flex justify-center items-center px-4 py-2.5 border border-[#CC2200] text-[#CC2200] hover:bg-[#CC2200] hover:text-white rounded-md text-xs font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shadow-sm"
+                            >
+                              {otpSending ? (
+                                <span className="flex items-center gap-1.5">
+                                  <span className="w-3.5 h-3.5 border-2 border-current border-t-transparent animate-spin rounded-full" />
+                                  Sending...
+                                </span>
+                              ) : (
+                                "Verify Email"
+                              )}
+                            </button>
+                          )}
+                        </div>
+
+                        {/* OTP Input & Verification Box */}
+                        {otpSent && !isEmailVerified && (
+                          <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg shadow-sm space-y-3">
+                            <div className="flex justify-between items-center text-xs font-semibold text-[#0a0a0a]/80">
+                              <span>Enter 6-digit OTP sent to your email:</span>
+                              {otpCountdown > 0 ? (
+                                <span className="text-[#CC2200] font-bold bg-[#CC2200]/10 px-2 py-0.5 rounded">
+                                  Expires in {formatTime(otpCountdown)}
+                                </span>
+                              ) : (
+                                <span className="text-rose-600 font-bold bg-rose-50 px-2 py-0.5 rounded">
+                                  Code expired
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="flex flex-col sm:flex-row gap-2">
+                              <input
+                                type="text"
+                                maxLength={6}
+                                value={otpCode}
+                                onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ""))}
+                                placeholder="123456"
+                                className="flex-1 bg-white border border-slate-300 rounded-md px-3 py-2 text-center text-lg font-mono tracking-widest text-[#0a0a0a] focus:border-[#CC2200] focus:ring-1 focus:ring-[#CC2200] outline-none shadow-inner"
+                              />
+                              <button
+                                type="button"
+                                disabled={otpVerifying || otpCode.length !== 6 || otpCountdown === 0}
+                                onClick={handleVerifyOTP}
+                                className="px-5 py-2 bg-[#CC2200] hover:bg-[#CC2200]/90 text-white rounded-md text-xs font-bold transition-colors disabled:opacity-50 shadow-sm flex items-center justify-center gap-1.5"
+                              >
+                                {otpVerifying ? (
+                                  <>
+                                    <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent animate-spin rounded-full" />
+                                    Verifying...
+                                  </>
+                                ) : (
+                                  "Verify OTP"
+                                )}
+                              </button>
+                            </div>
+
+                            <div className="flex justify-between items-center text-xs pt-1">
+                              {resendCountdown > 0 ? (
+                                <span className="text-[#0a0a0a]/50 font-medium">
+                                  Resend OTP in {resendCountdown}s
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={handleResendOTP}
+                                  className="text-[#CC2200] font-bold hover:underline"
+                                >
+                                  Resend OTP
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => { setOtpSent(false); setOtpCode(""); setOtpError(""); }}
+                                className="text-[#0a0a0a]/40 hover:text-[#0a0a0a]/70 font-medium"
+                              >
+                                Change Email
+                              </button>
+                            </div>
+
+                            {otpError && (
+                              <p className="text-xs text-rose-600 font-semibold bg-rose-50 p-2 rounded border border-rose-100">{otpError}</p>
+                            )}
+                            {otpSuccess && (
+                              <p className="text-xs text-emerald-600 font-semibold bg-emerald-50 p-2 rounded border border-emerald-100">{otpSuccess}</p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* Phone */}
@@ -567,7 +851,7 @@ export default function RegisterPage() {
                 <div className="pt-4">
                   <button
                     type="submit"
-                    disabled={loading}
+                    disabled={loading || (flow === "user" && !isEmailVerified)}
                     className="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-bold text-white bg-[#CC2200] hover:bg-[#CC2200]/95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#CC2200] transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
                   >
                     {loading 
@@ -576,6 +860,11 @@ export default function RegisterPage() {
                     }
                     {!loading && <ArrowRight className="ml-2 h-4 w-4 group-hover:translate-x-1 transition-transform" />}
                   </button>
+                  {flow === "user" && !isEmailVerified && (
+                    <p className="text-xs text-[#0a0a0a]/50 text-center mt-2 font-medium">
+                      * Verify your email address above to enable registration
+                    </p>
+                  )}
                 </div>
               </form>
 
@@ -591,6 +880,27 @@ export default function RegisterPage() {
             </>
           )}
         </div>
+      </div>
+
+      {/* Floating Toast Notification Stack */}
+      <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2.5 max-w-sm w-full pointer-events-none">
+        {toasts.map((t) => (
+          <div
+            key={t.id}
+            className={`pointer-events-auto px-4 py-3 rounded-lg shadow-xl border text-xs font-bold flex items-center gap-3 transition-all duration-300 transform translate-y-0 ${
+              t.type === "success"
+                ? "bg-emerald-900 text-white border-emerald-700"
+                : "bg-[#CC2200] text-white border-red-800"
+            }`}
+          >
+            {t.type === "success" ? (
+              <CheckCircle className="h-4 w-4 flex-shrink-0 text-emerald-400" />
+            ) : (
+              <ShieldAlert className="h-4 w-4 flex-shrink-0 text-red-300" />
+            )}
+            <span className="flex-1">{t.message}</span>
+          </div>
+        ))}
       </div>
     </div>
   );

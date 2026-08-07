@@ -11,10 +11,14 @@ class PriorityEnum(enum.Enum):
     CRITICAL = "CRITICAL"
 
 class StatusEnum(enum.Enum):
-    OPEN = "OPEN"
+    DRAFT = "DRAFT"
+    CASE_FILED = "CASE_FILED"
+    CASE_OPENED = "CASE_OPENED"
     UNDER_ANALYSIS = "UNDER_ANALYSIS"
-    REVIEW = "REVIEW"
+    EXPERT_REVIEW = "EXPERT_REVIEW"
     CLOSED = "CLOSED"
+    OPEN = "OPEN"
+    REVIEW = "REVIEW"
 
 class FileTypeEnum(enum.Enum):
     IMAGE = "IMAGE"
@@ -60,17 +64,19 @@ class InvestigationCase(Base):
     description = Column(Text)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     assigned_expert = Column(Integer, ForeignKey("users.id"))
-    priority = Column(Enum(PriorityEnum), default=PriorityEnum.MEDIUM)
-    status = Column(Enum(StatusEnum), default=StatusEnum.OPEN)
+    status = Column(Enum(StatusEnum), default=StatusEnum.DRAFT)
     incident_date = Column(DateTime(timezone=True))
+    submitted_at = Column(DateTime(timezone=True), nullable=True)
+    opened_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     creator = relationship("User", foreign_keys=[created_by], back_populates="investigation_cases")
     expert = relationship("User", foreign_keys=[assigned_expert], back_populates="assigned_cases")
-    evidence_files = relationship("EvidenceFile", back_populates="case")
-    notes = relationship("InvestigationNote", back_populates="case")
-    reports = relationship("Report", back_populates="case")
+    evidence_files = relationship("EvidenceFile", back_populates="case", cascade="all, delete-orphan")
+    notes = relationship("InvestigationNote", back_populates="case", cascade="all, delete-orphan")
+    reports = relationship("Report", back_populates="case", cascade="all, delete-orphan")
+    audit_logs = relationship("AuditLog", back_populates="case", cascade="all, delete-orphan")
 
 
 class EvidenceFile(Base):
@@ -89,8 +95,8 @@ class EvidenceFile(Base):
 
     case = relationship("InvestigationCase", back_populates="evidence_files")
     uploader = relationship("User", back_populates="evidence_uploaded")
-    metadata_info = relationship("MediaMetadata", back_populates="evidence", uselist=False)
-    analyses = relationship("AIAnalysis", back_populates="evidence")
+    metadata_info = relationship("MediaMetadata", back_populates="evidence", uselist=False, cascade="all, delete-orphan")
+    analyses = relationship("AIAnalysis", back_populates="evidence", cascade="all, delete-orphan")
 
 
 class MediaMetadata(Base):
@@ -137,7 +143,7 @@ class AIAnalysis(Base):
 
     evidence = relationship("EvidenceFile", back_populates="analyses")
     model = relationship("AIModel", back_populates="analyses")
-    reviews = relationship("ForensicReview", back_populates="analysis")
+    reviews = relationship("ForensicReview", back_populates="analysis", cascade="all, delete-orphan")
 
 
 class ForensicReview(Base):
@@ -188,3 +194,16 @@ class Notification(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("User", back_populates="notifications")
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    case_id = Column(Integer, ForeignKey("investigation_cases.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    action = Column(String(100), nullable=False)
+    description = Column(Text)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now())
+
+    case = relationship("InvestigationCase", back_populates="audit_logs")
+    user = relationship("User")

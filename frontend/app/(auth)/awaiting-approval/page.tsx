@@ -25,7 +25,7 @@ export default function AwaitingApprovalPage() {
           </div>
           
           <p className="text-slate-300 text-base leading-relaxed mb-6">
-            Your application for DeepGuard Portal access has been submitted successfully and is currently under review by our administrators.
+            Your application for Sentinel AI Portal access has been submitted successfully and is currently under review by our administrators.
           </p>
           
           <p className="text-slate-400 text-sm leading-relaxed mb-8">

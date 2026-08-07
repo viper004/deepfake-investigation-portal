@@ -1,5 +1,7 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from app.api.auth import router as auth_router
 from app.api.admin import router as admin_router
 import app.models.models  # Import all models to register with SQLAlchemy
@@ -47,6 +49,58 @@ def init_db_updates():
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             ) ENGINE=InnoDB;
         """))
+        # Check if email_verified column exists
+        res_ev = db.execute(text("SHOW COLUMNS FROM users LIKE 'email_verified'")).fetchone()
+        if not res_ev:
+            db.execute(text("ALTER TABLE users ADD COLUMN email_verified TINYINT(1) DEFAULT 0 NOT NULL"))
+            db.execute(text("ALTER TABLE users ADD COLUMN email_verified_at DATETIME NULL"))
+
+        # Create email_verifications table if not exists
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS email_verifications (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                email VARCHAR(255) NOT NULL,
+                otp_hash VARCHAR(255) NOT NULL,
+                expires_at DATETIME NOT NULL,
+                attempt_count INT DEFAULT 0 NOT NULL,
+                verified TINYINT(1) DEFAULT 0 NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_email (email)
+            ) ENGINE=InnoDB;
+        """))
+        # Check columns on investigation_cases
+        res_sub = db.execute(text("SHOW COLUMNS FROM investigation_cases LIKE 'submitted_at'")).fetchone()
+        if not res_sub:
+            db.execute(text("ALTER TABLE investigation_cases ADD COLUMN submitted_at DATETIME NULL"))
+        
+        res_op = db.execute(text("SHOW COLUMNS FROM investigation_cases LIKE 'opened_at'")).fetchone()
+        if not res_op:
+            db.execute(text("ALTER TABLE investigation_cases ADD COLUMN opened_at DATETIME NULL"))
+
+        res_inv = db.execute(text("SHOW COLUMNS FROM investigation_cases LIKE 'assigned_investigator_id'")).fetchone()
+        if not res_inv:
+            db.execute(text("ALTER TABLE investigation_cases ADD COLUMN assigned_investigator_id INT NULL"))
+
+        # Modify status column on investigation_cases to VARCHAR(50) DEFAULT 'DRAFT'
+        try:
+            db.execute(text("ALTER TABLE investigation_cases MODIFY COLUMN status VARCHAR(50) NOT NULL DEFAULT 'DRAFT'"))
+        except Exception as st_e:
+            print("Status column modify note:", st_e)
+
+        # Create audit_logs table if not exists
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                case_id INT NULL,
+                user_id INT NOT NULL,
+                action VARCHAR(100) NOT NULL,
+                description TEXT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (case_id) REFERENCES investigation_cases(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB;
+        """))
         db.commit()
     except Exception as e:
         print("Database migration/update error:", e)
@@ -83,7 +137,7 @@ def seed_roles_and_users():
             users_to_seed = [
                 {
                     "full_name": "Alexander Pierce",
-                    "email": "alexander.pierce@deepguard.gov",
+                    "email": "alexander.pierce@sentinel.ai",
                     "password": get_password_hash("password123"),
                     "phone": "+1 (555) 234-5678",
                     "organization": "Department of Homeland Security",
@@ -212,12 +266,16 @@ init_db_updates()
 seed_roles_and_users()
 seed_ai_models()
 
-app = FastAPI(title="DeepGuard API")
+app = FastAPI(title="Sentinel AI API")
+
+# Mount StaticFiles directory for uploads (evidence, profile pictures, documents)
+os.makedirs("uploads", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # Configure CORS so frontend can call backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://127.0.0.1:3001"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -225,6 +283,8 @@ app.add_middleware(
 
 from app.api.user import router as user_router
 
+app.include_router(auth_router)
+app.include_router(auth_router, prefix="/api")
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api")
 app.include_router(admin_router, prefix="/api/v1")
@@ -233,4 +293,4 @@ app.include_router(user_router, prefix="/api/v1")
 
 @app.get("/")
 def root():
-    return {"message": "DeepGuard Forensic Portal API"}
+    return {"message": "Sentinel AI Forensic Portal API"}

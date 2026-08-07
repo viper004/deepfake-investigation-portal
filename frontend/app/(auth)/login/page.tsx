@@ -34,15 +34,15 @@ export default function LoginPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
-      
+
       const data = await res.json();
-      
+
       if (!res.ok) {
         setError(data.detail || "Authentication failed");
         setLoading(false);
         return;
       }
-      
+
       const signInResult = await signIn("credentials", {
         email,
         password,
@@ -74,10 +74,10 @@ export default function LoginPage() {
           <div className="flex items-center gap-2.5 mb-10">
             <div className="w-8 h-8 bg-[#CC2200] rounded flex items-center justify-center">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
               </svg>
             </div>
-            <span className="font-bold text-lg tracking-tight">DeepGuard</span>
+            <span className="font-bold text-lg tracking-tight">Sentinel AI</span>
           </div>
 
           <h2 className="text-3xl font-bold tracking-tight mb-2">Welcome back</h2>
@@ -91,7 +91,7 @@ export default function LoginPage() {
                 {error}
               </div>
             )}
-            
+
             <div>
               <label className="block text-sm font-semibold text-[#0a0a0a]/80 mb-1.5">
                 Email address
@@ -168,13 +168,7 @@ export default function LoginPage() {
                 href="/register?flow=user"
                 className="w-full inline-flex justify-center items-center py-2.5 px-4 border border-[#e5e5e5] rounded-md shadow-sm text-sm font-bold text-[#0a0a0a]/80 bg-white hover:bg-slate-50 transition-colors"
               >
-                Register as User
-              </Link>
-              <Link
-                href="/register?flow=investigator"
-                className="w-full inline-flex justify-center items-center py-2.5 px-4 border border-[#CC2200]/10 rounded-md shadow-sm text-sm font-bold text-[#CC2200] bg-[#CC2200]/5 hover:bg-[#CC2200]/10 transition-colors"
-              >
-                Apply as Investigator
+                Register
               </Link>
             </div>
           </div>
@@ -183,7 +177,7 @@ export default function LoginPage() {
 
       {/* Right side: Image */}
       <div className="hidden md:block md:w-1/2 relative bg-black">
-        <div 
+        <div
           className="absolute inset-0 bg-cover bg-center transition-all duration-1000 opacity-90"
           style={{ backgroundImage: `url(${bgImage})` }}
         />
