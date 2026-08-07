@@ -116,7 +116,7 @@ export default function LandingPage() {
                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
               </svg>
             </div>
-            <span className="font-bold text-base tracking-tight">DeepGuard</span>
+            <span className="font-bold text-base tracking-tight">Sentinel AI</span>
           </div>
 
           {/* Desktop Nav */}
@@ -172,7 +172,7 @@ export default function LandingPage() {
           </h1>
 
           <p className="anim-fade-up d-100 text-lg leading-relaxed text-[#0a0a0a]/60 mb-10 max-w-xl">
-            DeepGuard is the professional investigation platform for detecting AI-generated media manipulation. Built for forensic analysts, journalists, and law enforcement.
+            Sentinel AI is the professional investigation platform for detecting AI-generated media manipulation. Built for forensic analysts, journalists, and law enforcement.
           </p>
 
           <div className="anim-fade-up d-150 flex flex-col sm:flex-row gap-3">
@@ -214,7 +214,7 @@ export default function LandingPage() {
             <div className="w-2.5 h-2.5 rounded-full bg-[#FFBD2E]" />
             <div className="w-2.5 h-2.5 rounded-full bg-[#28CA41]" />
             <div className="flex-1 mx-4 h-5 bg-[#f0f0f0] rounded-full flex items-center px-3">
-              <span className="text-[10px] text-[#0a0a0a]/40 font-mono">app.deepguard.io/dashboard</span>
+              <span className="text-[10px] text-[#0a0a0a]/40 font-mono">app.sentinelai.io/dashboard</span>
             </div>
           </div>
           {/* Dashboard mockup */}
@@ -337,7 +337,7 @@ export default function LandingPage() {
             Ready to investigate?
           </h2>
           <p className="text-base text-[#0a0a0a]/55 leading-relaxed mb-8">
-            Join thousands of investigators using DeepGuard to protect truth and expose AI manipulation.
+            Join thousands of investigators using Sentinel AI to protect truth and expose AI manipulation.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <Link
@@ -346,7 +346,7 @@ export default function LandingPage() {
             >
               Start free — no credit card
             </Link>
-            <a href="mailto:contact@deepguard.io" className="inline-flex items-center justify-center px-8 py-3.5 border border-[#e5e5e5] text-sm font-medium rounded hover:bg-black/4 transition-colors">
+            <a href="mailto:contact@sentinelai.io" className="inline-flex items-center justify-center px-8 py-3.5 border border-[#e5e5e5] text-sm font-medium rounded hover:bg-black/4 transition-colors">
               Talk to sales
             </a>
           </div>
@@ -362,10 +362,10 @@ export default function LandingPage() {
                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
               </svg>
             </div>
-            <span className="font-semibold text-sm">DeepGuard</span>
+            <span className="font-semibold text-sm">Sentinel AI</span>
           </div>
           <p className="text-xs text-[#0a0a0a]/40">
-            © {new Date().getFullYear()} DeepGuard. All rights reserved.
+            © {new Date().getFullYear()} Sentinel AI. All rights reserved.
           </p>
           <div className="flex gap-5 text-xs text-[#0a0a0a]/50">
             <a href="#" className="hover:text-[#0a0a0a] transition-colors">Privacy</a>

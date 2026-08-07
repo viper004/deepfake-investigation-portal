@@ -39,7 +39,12 @@ import {
   Play,
   RotateCcw,
   CheckCircle,
-  Info
+  Info,
+  Send,
+  ShieldCheck,
+  History,
+  Maximize2,
+  AlertTriangle
 } from "lucide-react";
 import WorkspaceSwitcher from "@/components/WorkspaceSwitcher";
 
@@ -57,7 +62,6 @@ interface CaseType {
   title: string;
   description: string;
   status: string;
-  priority: string;
   incident_date: string | null;
   created_at: string | null;
 }
@@ -120,6 +124,14 @@ interface ReportType {
   generated_at: string | null;
 }
 
+interface AuditLogType {
+  id: number;
+  action: string;
+  description: string;
+  user_name: string;
+  timestamp: string | null;
+}
+
 interface NotificationType {
   id: number;
   title: string;
@@ -144,10 +156,11 @@ export default function UserDashboard() {
 
   // Sidebar navigation and UI states
   const [activeTab, setActiveTab] = useState<
-    "Dashboard" | "My Cases" | "Upload Evidence" | "Evidence Library" | "AI Analysis" | "Investigation Notes" | "Reports" | "Profile" | "Settings"
+    "Dashboard" | "My Cases" | "All Cases" | "Assigned Cases" | "Open Cases" | "Upload Evidence" | "Evidence Library" | "AI Analysis" | "Investigation Notes" | "Reports" | "Profile" | "Settings"
   >("Dashboard");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastType[]>([]);
+  const [isLimitModalOpen, setIsLimitModalOpen] = useState(false);
   
   // Notification States
   const [notifications, setNotifications] = useState<NotificationType[]>([]);
@@ -160,6 +173,8 @@ export default function UserDashboard() {
 
   // Global statistics state
   const [stats, setStats] = useState({
+    availableCases: 0,
+    assignedCases: 0,
     totalCases: 0,
     openCases: 0,
     underAnalysis: 0,
@@ -177,29 +192,155 @@ export default function UserDashboard() {
   const [recentReports, setRecentReports] = useState<any[]>([]);
   const [recentLoading, setRecentLoading] = useState(true);
 
-  // Cases List View State
+  // Cases List View State (My Cases)
   const [cases, setCases] = useState<CaseType[]>([]);
   const [casesTotal, setCasesTotal] = useState(0);
   const [casesLoading, setCasesLoading] = useState(true);
   const [casesPage, setCasesPage] = useState(1);
   const [casesSearch, setCasesSearch] = useState("");
   const [casesStatusFilter, setCasesStatusFilter] = useState("");
-  const [casesPriorityFilter, setCasesPriorityFilter] = useState("");
   const [casesSortBy, setCasesSortBy] = useState("newest");
+
+  // Open Cases View State (Unassigned cases for Investigators)
+  const [openCases, setOpenCases] = useState<CaseType[]>([]);
+  const [openCasesTotal, setOpenCasesTotal] = useState(0);
+  const [openCasesLoading, setOpenCasesLoading] = useState(false);
+  const [openCasesPage, setOpenCasesPage] = useState(1);
+  const [openCasesSearch, setOpenCasesSearch] = useState("");
   const [isCreateCaseModalOpen, setIsCreateCaseModalOpen] = useState(false);
-  const [createCaseForm, setCreateCaseForm] = useState({ title: "", description: "", priority: "MEDIUM", incident_date: "" });
+  const [createCaseForm, setCreateCaseForm] = useState({ title: "", description: "", incident_date: "" });
 
   // Case Details View State
   const [selectedCaseId, setSelectedCaseId] = useState<number | null>(null);
   const [caseDetail, setCaseDetail] = useState<any | null>(null);
   const [caseDetailLoading, setCaseDetailLoading] = useState(false);
   const [isEditCaseModalOpen, setIsEditCaseModalOpen] = useState(false);
-  const [editCaseForm, setEditCaseForm] = useState({ title: "", description: "", priority: "MEDIUM", status: "OPEN", incident_date: "" });
+  const [editCaseForm, setEditCaseForm] = useState({ title: "", description: "", status: "OPEN", incident_date: "" });
   
   // Note creation/editing inside case detail
   const [newNoteText, setNewNoteText] = useState("");
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
   const [editingNoteText, setEditingNoteText] = useState("");
+
+  // Role & Workflow Immutability State
+  const isInvestigator = 
+    session?.user?.role === "INVESTIGATOR" || 
+    session?.user?.role === "ADMIN" || 
+    session?.user?.role === 1 || 
+    session?.user?.role === 2 || 
+    (session?.user as any)?.role_id === 1 || 
+    (session?.user as any)?.role_id === 2 || 
+    (Array.isArray(session?.user?.roles) && (session.user.roles.includes(1) || session.user.roles.includes(2)));
+  const [isSubmitConfirmModalOpen, setIsSubmitConfirmModalOpen] = useState(false);
+  const [isOpenConfirmModalOpen, setIsOpenConfirmModalOpen] = useState(false);
+  const [isClaimConfirmModalOpen, setIsClaimConfirmModalOpen] = useState(false);
+  const [isAlreadyClaimedModalOpen, setIsAlreadyClaimedModalOpen] = useState(false);
+  const [forensicModalOpen, setForensicModalOpen] = useState(false);
+  const [selectedAnalysisIdForReview, setSelectedAnalysisIdForReview] = useState<number | null>(null);
+  const [forensicForm, setForensicForm] = useState({ decision: "APPROVED", observations: "" });
+  const [isUploadingSingle, setIsUploadingSingle] = useState(false);
+  const [auditModalOpen, setAuditModalOpen] = useState(false);
+
+  // Citizen Submit Case for Review
+  const handleSubmitCaseForReview = async () => {
+    if (!selectedCaseId || !session?.accessToken) return;
+    try {
+      setSubmitting(true);
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/cases/${selectedCaseId}/submit`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${session.accessToken}` }
+      });
+
+      if (res.ok) {
+        showToast("Case submitted successfully for investigation review!", "success");
+        setIsSubmitConfirmModalOpen(false);
+        fetchCaseDetail(selectedCaseId);
+        refreshAll();
+      } else {
+        const data = await res.json();
+        showToast(data.detail || "Failed to submit case", "error");
+      }
+    } catch (err) {
+      showToast("An unexpected error occurred during submission", "error");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Investigator Claim / Open Case
+  const handleClaimCase = async () => {
+    if (!selectedCaseId || !session?.accessToken) return;
+    try {
+      setSubmitting(true);
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/cases/${selectedCaseId}/open`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${session.accessToken}` }
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        showToast("Investigation claimed and assigned to your workload!", "success");
+        setIsClaimConfirmModalOpen(false);
+        setIsOpenConfirmModalOpen(false);
+        await fetchCaseDetail(selectedCaseId);
+        refreshAll();
+        setActiveTab("Assigned Cases" as any);
+      } else {
+        setIsClaimConfirmModalOpen(false);
+        setIsOpenConfirmModalOpen(false);
+        const detailStr = typeof data.detail === "string" ? data.detail : (data.detail?.message || JSON.stringify(data.detail));
+        if (res.status === 400 && detailStr.includes("LIMIT_REACHED")) {
+          setIsLimitModalOpen(true);
+        } else if (res.status === 409 || detailStr.includes("already been assigned")) {
+          setIsAlreadyClaimedModalOpen(true);
+        } else {
+          showToast(detailStr || "Failed to claim case", "error");
+        }
+      }
+    } catch (err) {
+      setIsClaimConfirmModalOpen(false);
+      setIsOpenConfirmModalOpen(false);
+      showToast("An unexpected error occurred while claiming the case", "error");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleOpenCaseByInvestigator = handleClaimCase;
+
+  // Investigator Forensic Review Submit
+  const handleAddForensicReview = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedAnalysisIdForReview || !session?.accessToken) return;
+    try {
+      setSubmitting(true);
+      const formData = new FormData();
+      formData.append("analysis_id", selectedAnalysisIdForReview.toString());
+      formData.append("decision", forensicForm.decision);
+      formData.append("observations", forensicForm.observations);
+
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/reviews`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${session.accessToken}` },
+        body: formData
+      });
+
+      if (res.ok) {
+        showToast("Forensic expert review submitted successfully!", "success");
+        setForensicModalOpen(false);
+        setForensicForm({ decision: "APPROVED", observations: "" });
+        if (selectedCaseId) fetchCaseDetail(selectedCaseId);
+        refreshAll();
+      } else {
+        const data = await res.json();
+        showToast(data.detail || "Failed to submit review", "error");
+      }
+    } catch (err) {
+      showToast("An unexpected error occurred", "error");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   // Upload Evidence View State
   const [uploadTargetCaseId, setUploadTargetCaseId] = useState<string>("");
@@ -432,7 +573,6 @@ export default function UserDashboard() {
         limit: "10",
         search: casesSearch,
         status_filter: casesStatusFilter,
-        priority_filter: casesPriorityFilter,
         sort_by: casesSortBy
       });
       const res = await fetch(`${BACKEND_URL}/api/v1/user/cases?${queryParams}`, {
@@ -448,13 +588,74 @@ export default function UserDashboard() {
     } finally {
       setCasesLoading(false);
     }
-  }, [session, casesPage, casesSearch, casesStatusFilter, casesPriorityFilter, casesSortBy]);
+  }, [session, casesPage, casesSearch, casesStatusFilter, casesSortBy]);
 
   useEffect(() => {
-    if (activeTab === "My Cases" && !selectedCaseId) {
+    if ((activeTab === "My Cases" || activeTab === "Assigned Cases") && !selectedCaseId) {
       fetchCases();
     }
   }, [activeTab, selectedCaseId, fetchCases]);
+
+  // ─── Open Cases Fetching ───
+  const fetchOpenCases = useCallback(async () => {
+    if (!session?.accessToken) return;
+    try {
+      setOpenCasesLoading(true);
+      const queryParams = new URLSearchParams({
+        page: openCasesPage.toString(),
+        limit: "10",
+        search: openCasesSearch,
+        sort_by: "newest"
+      });
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/cases/open-cases?${queryParams}`, {
+        headers: { "Authorization": `Bearer ${session.accessToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setOpenCases(data.cases);
+        setOpenCasesTotal(data.total);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setOpenCasesLoading(false);
+    }
+  }, [session, openCasesPage, openCasesSearch]);
+
+  useEffect(() => {
+    if ((activeTab === "Open Cases" || activeTab === "All Cases") && !selectedCaseId) {
+      fetchOpenCases();
+    }
+  }, [activeTab, selectedCaseId, fetchOpenCases]);
+
+  const handleOpenCase = async (caseId: number) => {
+    if (!session?.accessToken) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/cases/${caseId}/open`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${session.accessToken}` }
+      });
+      if (res.ok) {
+        showToast("Case opened successfully and assigned to your workload!", "success");
+        fetchOpenCases();
+        fetchStats();
+      } else {
+        const err = await res.json();
+        const detailStr = typeof err.detail === "string" ? err.detail : (err.detail?.message || JSON.stringify(err.detail));
+        if (res.status === 400 && detailStr.includes("LIMIT_REACHED")) {
+          setIsLimitModalOpen(true);
+        } else if (res.status === 409 || detailStr.includes("already been assigned")) {
+          showToast("This case has already been assigned to another investigator.", "error");
+          fetchOpenCases();
+        } else {
+          showToast(detailStr || "Failed to open case", "error");
+        }
+      }
+    } catch (e) {
+      console.error(e);
+      showToast("Failed to open case", "error");
+    }
+  };
 
   // ─── Case Details Fetching ───
   const fetchCaseDetail = useCallback(async (caseId: number) => {
@@ -470,17 +671,24 @@ export default function UserDashboard() {
         setEditCaseForm({
           title: data.title,
           description: data.description || "",
-          priority: data.priority,
           status: data.status,
           incident_date: data.incident_date ? data.incident_date.substring(0, 10) : ""
         });
+      } else {
+        const err = await res.json();
+        showToast(err.detail || "Access Denied: You do not have permission to view this case.", "error");
+        setSelectedCaseId(null);
+        setCaseDetail(null);
       }
     } catch (e) {
       console.error(e);
+      showToast("Failed to fetch case details.", "error");
+      setSelectedCaseId(null);
+      setCaseDetail(null);
     } finally {
       setCaseDetailLoading(false);
     }
-  }, [session]);
+  }, [session, showToast]);
 
   const viewCaseDetails = (id: number) => {
     setSelectedCaseId(id);
@@ -496,7 +704,6 @@ export default function UserDashboard() {
       const formData = new FormData();
       formData.append("title", createCaseForm.title);
       formData.append("description", createCaseForm.description);
-      formData.append("priority", createCaseForm.priority);
       if (createCaseForm.incident_date) {
         formData.append("incident_date", createCaseForm.incident_date);
       }
@@ -510,7 +717,7 @@ export default function UserDashboard() {
       if (res.ok) {
         showToast("Investigation case created successfully!", "success");
         setIsCreateCaseModalOpen(false);
-        setCreateCaseForm({ title: "", description: "", priority: "MEDIUM", incident_date: "" });
+        setCreateCaseForm({ title: "", description: "", incident_date: "" });
         refreshAll();
         fetchCases();
       } else {
@@ -533,7 +740,6 @@ export default function UserDashboard() {
       const formData = new FormData();
       formData.append("title", editCaseForm.title);
       formData.append("description", editCaseForm.description);
-      formData.append("priority", editCaseForm.priority);
       formData.append("status", editCaseForm.status);
       if (editCaseForm.incident_date) {
         formData.append("incident_date", editCaseForm.incident_date);
@@ -654,8 +860,8 @@ export default function UserDashboard() {
     }
   };
 
-  const uploadSingleFile = async (file: File, caseId: number) => {
-    if (!session?.accessToken) return;
+  const uploadSingleFileInternal = async (file: File, caseId: number): Promise<boolean> => {
+    if (!session?.accessToken) return false;
     setUploadStatus(prev => ({ ...prev, [file.name]: "uploading" }));
     setUploadProgress(prev => ({ ...prev, [file.name]: 10 }));
 
@@ -664,7 +870,6 @@ export default function UserDashboard() {
     formData.append("file", file);
 
     try {
-      // Simulate progressive upload
       const interval = setInterval(() => {
         setUploadProgress(prev => {
           const current = prev[file.name] || 10;
@@ -674,7 +879,7 @@ export default function UserDashboard() {
           }
           return { ...prev, [file.name]: current + 20 };
         });
-      }, 200);
+      }, 150);
 
       const res = await fetch(`${BACKEND_URL}/api/v1/user/evidence/upload`, {
         method: "POST",
@@ -688,26 +893,45 @@ export default function UserDashboard() {
         setUploadProgress(prev => ({ ...prev, [file.name]: 100 }));
         setUploadStatus(prev => ({ ...prev, [file.name]: "success" }));
         showToast(`Uploaded ${file.name} successfully`, "success");
+
+        // Immediately fetch updated case details & evidence list to update UI without page refresh
+        await fetchCaseDetail(caseId);
+        await fetchEvidence();
+        refreshAll();
+        return true;
       } else {
+        const errorData = await res.json().catch(() => ({}));
         setUploadStatus(prev => ({ ...prev, [file.name]: "error" }));
-        showToast(`Failed to upload ${file.name}`, "error");
+        showToast(errorData.detail || `Failed to upload ${file.name}`, "error");
+        return false;
       }
     } catch (err) {
       setUploadStatus(prev => ({ ...prev, [file.name]: "error" }));
       showToast(`Error uploading ${file.name}`, "error");
+      return false;
+    }
+  };
+
+  const uploadSingleFile = async (file: File, caseId: number) => {
+    if (isUploadingSingle) return;
+    setIsUploadingSingle(true);
+    try {
+      await uploadSingleFileInternal(file, caseId);
+    } finally {
+      setIsUploadingSingle(false);
     }
   };
 
   const startUploads = async (targetId: number) => {
-    if (uploadFiles.length === 0) return;
-    for (const f of uploadFiles) {
-      await uploadSingleFile(f, targetId);
-    }
-    // Clear files lists
-    setUploadFiles([]);
-    refreshAll();
-    if (selectedCaseId) {
-      fetchCaseDetail(selectedCaseId);
+    if (uploadFiles.length === 0 || isUploadingSingle) return;
+    setIsUploadingSingle(true);
+    try {
+      for (const f of uploadFiles) {
+        await uploadSingleFileInternal(f, targetId);
+      }
+      setUploadFiles([]);
+    } finally {
+      setIsUploadingSingle(false);
     }
   };
 
@@ -755,9 +979,13 @@ export default function UserDashboard() {
         if (selectedCaseId) fetchCaseDetail(selectedCaseId);
         fetchEvidence();
         refreshAll();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.detail || "Failed to delete evidence file", "error");
       }
     } catch (err) {
       console.error(err);
+      showToast("Network error while deleting evidence", "error");
     }
   };
 
@@ -986,32 +1214,43 @@ export default function UserDashboard() {
     }
   };
 
-  // Render priority badges
-  const renderPriorityBadge = (priority: string) => {
-    const map: { [key: string]: string } = {
-      LOW: "bg-slate-100 text-slate-700 border-slate-200",
-      MEDIUM: "bg-blue-50 text-blue-700 border-blue-200",
-      HIGH: "bg-amber-50 text-amber-700 border-amber-200",
-      CRITICAL: "bg-rose-50 text-rose-700 border-rose-200"
-    };
-    return (
-      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border ${map[priority] || "bg-slate-100 text-slate-700 border-slate-200"}`}>
-        {priority}
-      </span>
-    );
+
+
+  // Format date helper (DD/MM/YYYY)
+  const formatDate = (dateStr?: string | null) => {
+    if (!dateStr) return "N/A";
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return "N/A";
+    return d.toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric"
+    });
   };
 
   // Render status badges
   const renderStatusBadge = (status: string) => {
     const map: { [key: string]: string } = {
-      OPEN: "bg-sky-50 text-sky-700 border-sky-200",
-      UNDER_ANALYSIS: "bg-purple-50 text-purple-700 border-purple-200",
-      REVIEW: "bg-amber-50 text-amber-700 border-amber-200",
-      CLOSED: "bg-emerald-50 text-emerald-700 border-emerald-200"
+      DRAFT: "bg-slate-100 text-slate-700 border-slate-300",
+      CASE_FILED: "bg-amber-50 text-amber-800 border-amber-300",
+      CASE_OPENED: "bg-blue-50 text-blue-800 border-blue-300",
+      UNDER_ANALYSIS: "bg-purple-50 text-purple-800 border-purple-300",
+      EXPERT_REVIEW: "bg-indigo-50 text-indigo-800 border-indigo-300",
+      CLOSED: "bg-emerald-50 text-emerald-800 border-emerald-300",
+      OPEN: "bg-sky-50 text-sky-800 border-sky-300"
+    };
+    const labels: { [key: string]: string } = {
+      DRAFT: "Draft",
+      CASE_FILED: "Case Filed",
+      CASE_OPENED: "Case Opened",
+      UNDER_ANALYSIS: "Under AI Analysis",
+      EXPERT_REVIEW: "Expert Review",
+      CLOSED: "Closed",
+      OPEN: "Open"
     };
     return (
       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold border ${map[status] || "bg-slate-50 text-slate-700 border-slate-200"}`}>
-        {status.replace("_", " ")}
+        {labels[status] || status.replace("_", " ")}
       </span>
     );
   };
@@ -1094,7 +1333,7 @@ export default function UserDashboard() {
                 <div className="w-8 h-8 bg-[#CC2200] rounded flex items-center justify-center shadow-md">
                   <ShieldAlert className="h-5 w-5 text-white" />
                 </div>
-                <span className="font-bold text-lg tracking-tight">DeepGuard Portal</span>
+                <span className="font-bold text-lg tracking-tight">Sentinel AI Portal</span>
               </div>
             </div>
 
@@ -1165,34 +1404,58 @@ export default function UserDashboard() {
                   onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
                   className="flex items-center gap-2 p-1 rounded-full hover:bg-slate-100 transition-colors"
                 >
-                  <div className="w-8 h-8 rounded-full bg-[#CC2200] text-white flex items-center justify-center font-bold text-sm shadow-sm">
-                    {session?.user?.name?.[0].toUpperCase() || "I"}
-                  </div>
+                  {(currentProfile?.profile_picture || session?.user?.image || (session?.user as any)?.profile_picture) ? (
+                    <img
+                      src={currentProfile?.profile_picture || session?.user?.image || (session?.user as any)?.profile_picture}
+                      alt={session?.user?.name || "Profile"}
+                      className="w-8 h-8 rounded-full object-cover border border-[#e5e5e5] shadow-sm flex-shrink-0"
+                    />
+                  ) : (
+                    <div className="w-8 h-8 rounded-full bg-[#CC2200] text-white flex items-center justify-center font-bold text-sm shadow-sm">
+                      {session?.user?.name?.[0].toUpperCase() || "I"}
+                    </div>
+                  )}
                   <ChevronDown className="h-4 w-4 text-[#0a0a0a]/60" />
                 </button>
 
                 {profileDropdownOpen && (
-                  <div className="absolute right-0 mt-2 w-48 bg-white border border-[#e5e5e5] rounded-lg shadow-lg z-50 py-1 animate-slide-in">
-                    <div className="px-4 py-2 border-b border-[#e5e5e5] text-left">
-                      <p className="text-sm font-bold text-[#0a0a0a] truncate">{session?.user?.name}</p>
-                      <p className="text-xs text-[#0a0a0a]/50 truncate">{session?.user?.email}</p>
+                  <div className="absolute right-0 mt-2 w-52 bg-white border border-[#e5e5e5] rounded-lg shadow-lg z-50 py-1 animate-slide-in">
+                    <div className="px-4 py-2.5 border-b border-[#e5e5e5] flex items-center gap-3 text-left">
+                      {(currentProfile?.profile_picture || session?.user?.image || (session?.user as any)?.profile_picture) ? (
+                        <img
+                          src={currentProfile?.profile_picture || session?.user?.image || (session?.user as any)?.profile_picture}
+                          alt="Profile"
+                          className="w-9 h-9 rounded-full object-cover border border-[#e5e5e5] shadow-xs flex-shrink-0"
+                        />
+                      ) : (
+                        <div className="w-9 h-9 rounded-full bg-[#CC2200] text-white flex items-center justify-center font-bold text-sm shadow-xs flex-shrink-0">
+                          {session?.user?.name?.[0].toUpperCase() || "I"}
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-bold text-[#0a0a0a] truncate">{session?.user?.name || currentProfile?.full_name}</p>
+                        <p className="text-xs text-[#0a0a0a]/50 truncate">{session?.user?.email || currentProfile?.email}</p>
+                      </div>
                     </div>
                     <button
                       onClick={() => navigateTo("Profile")}
-                      className="w-full text-left px-4 py-2 text-sm text-[#0a0a0a]/70 hover:bg-slate-50 hover:text-[#0a0a0a] transition-colors"
+                      className="w-full text-left px-4 py-2 text-sm text-[#0a0a0a]/70 hover:bg-slate-50 hover:text-[#0a0a0a] transition-colors flex items-center gap-2"
                     >
+                      <User className="h-4 w-4" />
                       My Profile
                     </button>
                     <button
                       onClick={() => navigateTo("Settings")}
-                      className="w-full text-left px-4 py-2 text-sm text-[#0a0a0a]/70 hover:bg-slate-50 hover:text-[#0a0a0a] transition-colors"
+                      className="w-full text-left px-4 py-2 text-sm text-[#0a0a0a]/70 hover:bg-slate-50 hover:text-[#0a0a0a] transition-colors flex items-center gap-2"
                     >
+                      <Settings className="h-4 w-4" />
                       Portal Settings
                     </button>
                     <button
                       onClick={() => signOut({ callbackUrl: "/" })}
-                      className="w-full text-left px-4 py-2 text-sm text-rose-600 hover:bg-rose-50 transition-colors border-t border-[#e5e5e5]"
+                      className="w-full text-left px-4 py-2 text-sm text-rose-600 hover:bg-rose-50 transition-colors border-t border-[#e5e5e5] flex items-center gap-2"
                     >
+                      <LogOut className="h-4 w-4" />
                       Sign Out
                     </button>
                   </div>
@@ -1214,12 +1477,10 @@ export default function UserDashboard() {
               <span className="text-[10px] uppercase font-bold text-[#0a0a0a]/40 tracking-wider">Investigator Console</span>
             </div>
             <nav className="space-y-1">
-              {(session?.user?.role === "INVESTIGATOR" ? [
+              {(isInvestigator ? [
                 { id: "Dashboard", label: "Dashboard", icon: <LayoutDashboard className="h-4 w-4" /> },
-                { id: "My Cases", label: "Assigned Cases", icon: <FolderSearch className="h-4 w-4" /> },
-                { id: "Evidence Library", label: "Evidence Review", icon: <FileVideo className="h-4 w-4" /> },
-                { id: "AI Analysis", label: "AI Analysis", icon: <BrainCircuit className="h-4 w-4" /> },
-                { id: "Investigation Notes", label: "Investigation Notes", icon: <Notebook className="h-4 w-4" /> },
+                { id: "All Cases", label: "All Cases", icon: <ShieldAlert className="h-4 w-4" /> },
+                { id: "Assigned Cases", label: "Assigned Cases", icon: <FolderSearch className="h-4 w-4" /> },
                 { id: "Reports", label: "Reports", icon: <FileText className="h-4 w-4" /> },
                 { id: "Profile", label: "Profile", icon: <User className="h-4 w-4" /> },
                 { id: "Settings", label: "Settings", icon: <Settings className="h-4 w-4" /> },
@@ -1270,12 +1531,10 @@ export default function UserDashboard() {
                 </button>
               </div>
               <nav className="space-y-1">
-                {(session?.user?.role === "INVESTIGATOR" ? [
+                {(isInvestigator ? [
                   { id: "Dashboard", label: "Dashboard", icon: <LayoutDashboard className="h-4 w-4" /> },
-                  { id: "My Cases", label: "Assigned Cases", icon: <FolderSearch className="h-4 w-4" /> },
-                  { id: "Evidence Library", label: "Evidence Review", icon: <FileVideo className="h-4 w-4" /> },
-                  { id: "AI Analysis", label: "AI Analysis", icon: <BrainCircuit className="h-4 w-4" /> },
-                  { id: "Investigation Notes", label: "Investigation Notes", icon: <Notebook className="h-4 w-4" /> },
+                  { id: "All Cases", label: "All Cases", icon: <ShieldAlert className="h-4 w-4" /> },
+                  { id: "Assigned Cases", label: "Assigned Cases", icon: <FolderSearch className="h-4 w-4" /> },
                   { id: "Reports", label: "Reports", icon: <FileText className="h-4 w-4" /> },
                   { id: "Profile", label: "Profile", icon: <User className="h-4 w-4" /> },
                   { id: "Settings", label: "Settings", icon: <Settings className="h-4 w-4" /> },
@@ -1314,19 +1573,24 @@ export default function UserDashboard() {
           {activeTab === "Dashboard" && (
             <div className="space-y-6 animate-scale-up">
               <div>
-                <h1 className="text-2xl font-bold tracking-tight">{session?.user?.role === "INVESTIGATOR" ? "Investigator Dashboard" : "My Dashboard"}</h1>
+                <h1 className="text-2xl font-bold tracking-tight">{isInvestigator ? "Investigator Dashboard" : "My Dashboard"}</h1>
                 <p className="text-sm text-[#0a0a0a]/50">Real-time status of your investigation cases, uploads, and AI analysis reports.</p>
               </div>
 
               {/* Stats Grid */}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                {[
+                {(isInvestigator ? [
+                  { label: "Available Cases", value: stats.availableCases, icon: <ShieldAlert className="h-4 w-4 text-amber-600" />, loading: statsLoading },
+                  { label: "Assigned Cases", value: stats.assignedCases, icon: <FolderSearch className="h-4 w-4 text-[#CC2200]" />, loading: statsLoading },
+                  { label: "Evidence Files Reviewed", value: stats.evidenceUploaded, icon: <FileVideo className="h-4 w-4 text-purple-600" />, loading: statsLoading },
+                  { label: "AI Analyses Completed", value: stats.aiAnalysesCompleted, icon: <BrainCircuit className="h-4 w-4 text-emerald-600" />, loading: statsLoading },
+                ] : [
                   { label: "Total Cases", value: stats.totalCases, icon: <FolderSearch className="h-4 w-4 text-[#CC2200]" />, loading: statsLoading },
                   { label: "Open Cases", value: stats.openCases, icon: <Activity className="h-4 w-4 text-sky-600" />, loading: statsLoading },
                   { label: "Evidence Uploaded", value: stats.evidenceUploaded, icon: <FileVideo className="h-4 w-4 text-purple-600" />, loading: statsLoading },
                   { label: "AI Scans", value: stats.aiAnalysesCompleted, icon: <BrainCircuit className="h-4 w-4 text-emerald-600" />, loading: statsLoading },
-                ].map((card, i) => (
-                  <div key={i} className="bg-white border border-[#e5e5e5] rounded-lg p-5 shadow-sm hover:shadow-md transition-shadow">
+                ]).map((card, i) => (
+                  <div key={i} className="bg-white border border-[#e5e5e5] rounded-lg p-5 shadow-sm hover:shadow-md transition-shadow text-left">
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-xs font-semibold text-[#0a0a0a]/50 uppercase tracking-wider">{card.label}</span>
                       {card.icon}
@@ -1346,8 +1610,8 @@ export default function UserDashboard() {
                 {/* Recent Cases */}
                 <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm flex flex-col">
                   <div className="px-5 py-4 border-b border-[#e5e5e5] flex justify-between items-center">
-                    <h2 className="font-bold text-sm">Recent Investigation Cases</h2>
-                    <button onClick={() => navigateTo("My Cases")} className="text-xs font-bold text-[#CC2200] hover:underline">View All</button>
+                    <h2 className="font-bold text-sm">{isInvestigator ? "Recent Assigned Cases" : "Recent Investigation Cases"}</h2>
+                    <button onClick={() => navigateTo(isInvestigator ? "Assigned Cases" : "My Cases")} className="text-xs font-bold text-[#CC2200] hover:underline">View All</button>
                   </div>
                   <div className="p-4 flex-1">
                     {recentLoading ? (
@@ -1369,7 +1633,6 @@ export default function UserDashboard() {
                               <p className="text-sm font-semibold text-[#0a0a0a]/80 mt-0.5">{c.title}</p>
                             </div>
                             <div className="flex gap-2">
-                              {renderPriorityBadge(c.priority)}
                               {renderStatusBadge(c.status)}
                             </div>
                           </div>
@@ -1487,21 +1750,29 @@ export default function UserDashboard() {
             </div>
           )}
 
-          {/* ──────────────── 2. MY CASES VIEW ──────────────── */}
-          {activeTab === "My Cases" && !selectedCaseId && (
+          {/* ──────────────── 2. ASSIGNED CASES / MY CASES VIEW ──────────────── */}
+          {(activeTab === "My Cases" || activeTab === "Assigned Cases") && !selectedCaseId && (
             <div className="space-y-6 animate-scale-up">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
-                  <h1 className="text-2xl font-bold tracking-tight">My Cases</h1>
-                  <p className="text-sm text-[#0a0a0a]/50">Manage your active, review, and closed investigation case records.</p>
+                  <h1 className="text-2xl font-bold tracking-tight">
+                    {isInvestigator ? "Assigned Cases" : "My Cases"}
+                  </h1>
+                  <p className="text-sm text-[#0a0a0a]/50">
+                    {isInvestigator
+                      ? "Cases assigned to your active digital investigation workload."
+                      : "Manage your active, review, and closed investigation case records."}
+                  </p>
                 </div>
-                <button
-                  onClick={() => setIsCreateCaseModalOpen(true)}
-                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md bg-[#CC2200] text-white text-sm font-bold shadow-md hover:opacity-90 transition-opacity"
-                >
-                  <Plus className="h-4 w-4" />
-                  New Case
-                </button>
+                {!isInvestigator && (
+                  <button
+                    onClick={() => setIsCreateCaseModalOpen(true)}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md bg-[#CC2200] text-white text-sm font-bold shadow-md hover:opacity-90 transition-opacity"
+                  >
+                    <Plus className="h-4 w-4" />
+                    New Case
+                  </button>
+                )}
               </div>
 
               {/* Filters toolbar */}
@@ -1527,23 +1798,10 @@ export default function UserDashboard() {
                     className="bg-slate-50 border border-[#e5e5e5] rounded-md text-sm px-3 py-2 outline-none focus:ring-1 focus:ring-[#CC2200] text-[#0a0a0a]"
                   >
                     <option value="">All Statuses</option>
-                    <option value="OPEN">Open</option>
+                    <option value="CASE_OPENED">Case Opened</option>
                     <option value="UNDER_ANALYSIS">Under Analysis</option>
-                    <option value="REVIEW">Review</option>
+                    <option value="EXPERT_REVIEW">Expert Review</option>
                     <option value="CLOSED">Closed</option>
-                  </select>
-
-                  {/* Priority Filter */}
-                  <select
-                    value={casesPriorityFilter}
-                    onChange={(e) => { setCasesPriorityFilter(e.target.value); setCasesPage(1); }}
-                    className="bg-slate-50 border border-[#e5e5e5] rounded-md text-sm px-3 py-2 outline-none focus:ring-1 focus:ring-[#CC2200] text-[#0a0a0a]"
-                  >
-                    <option value="">All Priorities</option>
-                    <option value="LOW">Low</option>
-                    <option value="MEDIUM">Medium</option>
-                    <option value="HIGH">High</option>
-                    <option value="CRITICAL">Critical</option>
                   </select>
 
                   {/* Sort */}
@@ -1577,39 +1835,72 @@ export default function UserDashboard() {
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
+                    <table className="w-full text-left border-collapse text-sm">
                       <thead>
                         <tr className="bg-slate-50 border-b border-[#e5e5e5] text-xs font-bold text-[#0a0a0a]/60 uppercase">
                           <th className="px-6 py-4">Case Code</th>
                           <th className="px-6 py-4">Title</th>
-                          <th className="px-6 py-4">Priority</th>
                           <th className="px-6 py-4">Status</th>
-                          <th className="px-6 py-4">Incident Date</th>
-                          <th className="px-6 py-4 text-right">Actions</th>
+                          {isInvestigator ? (
+                            <>
+                              <th className="px-6 py-4">AI Progress</th>
+                              <th className="px-6 py-4">Last Updated</th>
+                              <th className="px-6 py-4 text-center">Action</th>
+                            </>
+                          ) : (
+                            <>
+                              <th className="px-6 py-4">Incident Date</th>
+                              <th className="px-6 py-4">Created On</th>
+                            </>
+                          )}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#e5e5e5] text-sm">
-                        {cases.map((c) => (
+                        {cases.map((c: any) => (
                           <tr key={c.id} className="hover:bg-slate-50/50">
-                            <td className="px-6 py-4 font-bold text-[#CC2200]">{c.case_number}</td>
+                            <td className="px-6 py-4 font-bold">
+                              <button
+                                type="button"
+                                onClick={() => viewCaseDetails(c.id)}
+                                className="text-[#CC2200] hover:underline cursor-pointer font-bold text-left font-mono"
+                              >
+                                {c.case_number}
+                              </button>
+                            </td>
                             <td className="px-6 py-4">
                               <p className="font-semibold text-[#0a0a0a]">{c.title}</p>
                               <p className="text-xs text-[#0a0a0a]/50 truncate max-w-[240px]">{c.description}</p>
                             </td>
-                            <td className="px-6 py-4">{renderPriorityBadge(c.priority)}</td>
                             <td className="px-6 py-4">{renderStatusBadge(c.status)}</td>
-                            <td className="px-6 py-4 text-xs text-[#0a0a0a]/60">
-                              {c.incident_date ? new Date(c.incident_date).toLocaleDateString() : "N/A"}
-                            </td>
-                            <td className="px-6 py-4 text-right">
-                              <button
-                                onClick={() => viewCaseDetails(c.id)}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-[#e5e5e5] text-xs font-semibold hover:bg-slate-100 hover:text-[#0a0a0a] transition-all"
-                              >
-                                <Eye className="h-3.5 w-3.5" />
-                                Open Case
-                              </button>
-                            </td>
+                            {isInvestigator ? (
+                              <>
+                                <td className="px-6 py-4">
+                                  <span className="text-xs font-semibold text-sky-700 bg-sky-50 border border-sky-200 px-2.5 py-1 rounded inline-block">
+                                    {c.ai_progress || `${c.evidence_count || 0} file(s)`}
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4 text-xs text-[#0a0a0a]/60">
+                                  {formatDate(c.updated_at || c.created_at)}
+                                </td>
+                                <td className="px-6 py-4 text-center">
+                                  <button
+                                    onClick={() => viewCaseDetails(c.id)}
+                                    className="px-3 py-1.5 bg-[#CC2200] hover:bg-[#a81c00] text-white text-xs font-bold rounded transition-colors"
+                                  >
+                                    View Investigation
+                                  </button>
+                                </td>
+                              </>
+                            ) : (
+                              <>
+                                <td className="px-6 py-4 text-xs text-[#0a0a0a]/60">
+                                  {formatDate(c.incident_date)}
+                                </td>
+                                <td className="px-6 py-4 text-xs text-[#0a0a0a]/60">
+                                  {formatDate(c.created_at)}
+                                </td>
+                              </>
+                            )}
                           </tr>
                         ))}
                       </tbody>
@@ -1657,23 +1948,93 @@ export default function UserDashboard() {
                 >
                   &larr; Back to Cases
                 </button>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setIsEditCaseModalOpen(true)}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded border border-[#e5e5e5] text-xs font-semibold bg-white hover:bg-slate-50 transition-colors"
-                  >
-                    <Edit2 className="h-3.5 w-3.5" />
-                    Edit Details
-                  </button>
-                  <button
-                    onClick={() => handleGenerateReport(caseDetail.id, "FINAL")}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded bg-[#CC2200] text-white text-xs font-semibold shadow hover:opacity-90 transition-opacity"
-                  >
-                    <FileText className="h-3.5 w-3.5" />
-                    Generate Report
-                  </button>
+                
+                {/* Header Action Buttons */}
+                <div className="flex items-center gap-2">
+                  {isInvestigator ? (
+                    <>
+                      {caseDetail.status === "CASE_FILED" && !caseDetail.assigned_expert && (
+                        <button
+                          onClick={() => setIsClaimConfirmModalOpen(true)}
+                          className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded bg-[#CC2200] hover:bg-[#a81c00] text-white text-xs font-bold shadow-md transition-colors"
+                        >
+                          <ShieldCheck className="h-4 w-4" />
+                          Investigate This Case
+                        </button>
+                      )}
+                      {caseDetail.assigned_expert && (
+                        <>
+                          <button
+                            onClick={() => setIsEditCaseModalOpen(true)}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded border border-[#e5e5e5] text-xs font-semibold bg-white hover:bg-slate-50 transition-colors"
+                          >
+                            <Edit2 className="h-3.5 w-3.5" />
+                            Edit Details
+                          </button>
+                          <button
+                            onClick={() => handleGenerateReport(caseDetail.id, "FINAL")}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded bg-[#CC2200] text-white text-xs font-semibold shadow hover:opacity-90 transition-opacity"
+                          >
+                            <FileText className="h-3.5 w-3.5" />
+                            Generate Report
+                          </button>
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    /* Citizen / Reporter View */
+                    (caseDetail.status === "DRAFT" || caseDetail.status === "OPEN") && (
+                      <div className="flex flex-col items-end gap-1">
+                        {(() => {
+                          const hasEv = caseDetail.evidence && caseDetail.evidence.length > 0;
+                          const hasNt = caseDetail.notes && caseDetail.notes.length > 0;
+                          const canSubmit = hasEv && hasNt;
+                          return (
+                            <>
+                              <button
+                                onClick={() => setIsSubmitConfirmModalOpen(true)}
+                                disabled={!canSubmit}
+                                className={`inline-flex items-center gap-2 px-4 py-2 rounded-md font-bold text-xs shadow transition-all ${
+                                  canSubmit
+                                    ? "bg-[#CC2200] text-white hover:opacity-90 cursor-pointer"
+                                    : "bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300"
+                                }`}
+                              >
+                                <Send className="h-3.5 w-3.5" />
+                                Submit for Review
+                              </button>
+                              {!canSubmit && (
+                                <p className="text-[10px] text-amber-700 font-semibold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                                  Requires at least 1 evidence file and 1 note before submission.
+                                </p>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
+                    )
+                  )}
                 </div>
               </div>
+
+              {/* Citizen Submitted Banner */}
+              {!isInvestigator && caseDetail.status !== "DRAFT" && caseDetail.status !== "OPEN" && (
+                <div className="bg-amber-50/90 border border-amber-200 rounded-lg p-3.5 flex items-center gap-3 text-amber-900 text-xs font-semibold shadow-sm">
+                  <Lock className="h-4 w-4 text-amber-600 flex-shrink-0" />
+                  <div>
+                    <span>This case has been officially submitted for investigation and is now read-only.</span>
+                    {caseDetail.submitted_at && (
+                      <span className="block text-[10px] text-amber-700 font-normal mt-0.5">
+                        Submitted on: {new Date(caseDetail.submitted_at).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+
+
+
 
               {/* Case Header Card */}
               <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm p-6 space-y-4">
@@ -1682,9 +2043,16 @@ export default function UserDashboard() {
                     <span className="text-xs font-bold text-[#CC2200] tracking-wider uppercase">{caseDetail.case_number}</span>
                     <h1 className="text-2xl font-bold mt-1 text-[#0a0a0a]">{caseDetail.title}</h1>
                   </div>
-                  <div className="flex gap-2">
-                    {renderPriorityBadge(caseDetail.priority)}
+                  <div className="flex items-center gap-2">
                     {renderStatusBadge(caseDetail.status)}
+                    <button
+                      onClick={() => setAuditModalOpen(true)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-100 hover:bg-slate-200 text-xs font-semibold border border-[#e5e5e5] text-[#0a0a0a] transition-colors shadow-xs"
+                      title="View full case audit log"
+                    >
+                      <History className="h-3.5 w-3.5 text-[#CC2200]" />
+                      Audit Trail
+                    </button>
                   </div>
                 </div>
                 <p className="text-sm text-[#0a0a0a]/75 leading-relaxed">{caseDetail.description || "No description provided."}</p>
@@ -1692,11 +2060,11 @@ export default function UserDashboard() {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-4 border-t border-[#e5e5e5] text-xs font-semibold text-[#0a0a0a]/60">
                   <div>
                     <span className="block text-[10px] text-[#0a0a0a]/40 uppercase mb-0.5">Incident Date</span>
-                    {caseDetail.incident_date ? new Date(caseDetail.incident_date).toLocaleDateString() : "N/A"}
+                    {formatDate(caseDetail.incident_date)}
                   </div>
                   <div>
                     <span className="block text-[10px] text-[#0a0a0a]/40 uppercase mb-0.5">Created On</span>
-                    {new Date(caseDetail.created_at).toLocaleDateString()}
+                    {formatDate(caseDetail.created_at)}
                   </div>
                   <div>
                     <span className="block text-[10px] text-[#0a0a0a]/40 uppercase mb-0.5">Assigned Expert</span>
@@ -1709,28 +2077,50 @@ export default function UserDashboard() {
                 </div>
               </div>
 
-              {/* Nested Tabs within Case Details */}
+              {/* Case Content Grid */}
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 
-                {/* Left & Middle Column (Evidence & AI analysis & Reports) */}
+                {/* Left & Middle Column */}
                 <div className="lg:col-span-2 space-y-6">
                   
                   {/* Evidence Table */}
                   <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm overflow-hidden">
                     <div className="px-5 py-4 border-b border-[#e5e5e5] flex justify-between items-center bg-slate-50/50">
                       <h3 className="font-bold text-sm">Uploaded Evidence</h3>
-                      <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-100 hover:bg-slate-200 text-xs font-semibold cursor-pointer border border-[#e5e5e5]">
-                        <Plus className="h-3.5 w-3.5" />
-                        Add Evidence
-                        <input type="file" onChange={(e) => {
-                          if (e.target.files && e.target.files[0]) {
-                            uploadSingleFile(e.target.files[0], caseDetail.id);
-                          }
-                        }} className="hidden" />
-                      </label>
+                      {(isInvestigator || caseDetail.status === "DRAFT" || caseDetail.status === "OPEN") && (
+                        <label className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold border border-[#e5e5e5] transition-all ${
+                          isUploadingSingle ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-slate-100 hover:bg-slate-200 cursor-pointer text-[#0a0a0a]"
+                        }`}>
+                          {isUploadingSingle ? <Loader2 className="h-3.5 w-3.5 animate-spin text-[#CC2200]" /> : <Plus className="h-3.5 w-3.5" />}
+                          {isUploadingSingle ? "Uploading..." : "Add Evidence"}
+                          <input
+                            type="file"
+                            disabled={isUploadingSingle}
+                            onChange={async (e) => {
+                              if (e.target.files && e.target.files[0]) {
+                                const fileToUpload = e.target.files[0];
+                                e.target.value = "";
+                                await uploadSingleFile(fileToUpload, caseDetail.id);
+                              }
+                            }}
+                            className="hidden"
+                          />
+                        </label>
+                      )}
                     </div>
 
-                    {caseDetail.evidence.length === 0 ? (
+                    {/* Inline Progress Banner while uploading single file */}
+                    {isUploadingSingle && (
+                      <div className="p-3.5 bg-red-50/40 border-b border-[#e5e5e5] flex items-center justify-between animate-pulse">
+                        <div className="flex items-center gap-3">
+                          <Loader2 className="h-4 w-4 text-[#CC2200] animate-spin flex-shrink-0" />
+                          <span className="text-xs font-semibold text-[#0a0a0a]">Uploading evidence file to case...</span>
+                        </div>
+                        <span className="text-[10px] font-bold text-[#CC2200] uppercase tracking-wider">Processing</span>
+                      </div>
+                    )}
+
+                    {caseDetail.evidence.length === 0 && !isUploadingSingle ? (
                       <div className="p-8 text-center text-xs text-[#0a0a0a]/40">No evidence uploaded yet.</div>
                     ) : (
                       <div className="divide-y divide-[#e5e5e5]">
@@ -1770,25 +2160,29 @@ export default function UserDashboard() {
                                 <Download className="h-3.5 w-3.5" />
                               </a>
 
-                              {/* Delete */}
-                              <button
-                                onClick={() => handleDeleteEvidence(ev.id)}
-                                className="p-1.5 border border-rose-200 rounded text-rose-600 hover:bg-rose-50"
-                                title="Delete"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
+                              {/* Delete - Only before submission or for investigator */}
+                              {(isInvestigator || caseDetail.status === "DRAFT" || caseDetail.status === "OPEN") && (
+                                <button
+                                  onClick={() => handleDeleteEvidence(ev.id)}
+                                  className="p-1.5 border border-rose-200 rounded text-rose-600 hover:bg-rose-50"
+                                  title="Delete"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              )}
 
-                              {/* Run AI Analysis shortcut */}
-                              <button
-                                onClick={() => {
-                                  setSelectedEvidenceForAI(ev.id.toString());
-                                  navigateTo("AI Analysis");
-                                }}
-                                className="px-2.5 py-1.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-bold hover:bg-emerald-100 transition-colors"
-                              >
-                                Run AI
-                              </button>
+                              {/* Run AI Analysis shortcut - Investigator Only */}
+                              {isInvestigator && (
+                                <button
+                                  onClick={() => {
+                                    setSelectedEvidenceForAI(ev.id.toString());
+                                    navigateTo("AI Analysis");
+                                  }}
+                                  className="px-2.5 py-1.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-bold hover:bg-emerald-100 transition-colors"
+                                >
+                                  Run AI
+                                </button>
+                              )}
 
                             </div>
                           </div>
@@ -1797,80 +2191,101 @@ export default function UserDashboard() {
                     )}
                   </div>
 
-                  {/* AI Analyses Results */}
-                  <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm overflow-hidden">
-                    <div className="px-5 py-4 border-b border-[#e5e5e5] bg-slate-50/50">
-                      <h3 className="font-bold text-sm">AI Manipulation Scans</h3>
-                    </div>
-                    
-                    {caseDetail.evidence.every((ev: any) => !ev.analyses || ev.analyses.length === 0) ? (
-                      <div className="p-8 text-center text-xs text-[#0a0a0a]/40">No scans performed. Select evidence to run AI models.</div>
-                    ) : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left">
-                          <thead>
-                            <tr className="bg-slate-50 border-b border-[#e5e5e5] text-[10px] font-bold text-[#0a0a0a]/60 uppercase">
-                              <th className="px-4 py-3">File Name</th>
-                              <th className="px-4 py-3">Model</th>
-                              <th className="px-4 py-3">Confidence</th>
-                              <th className="px-4 py-3">Result</th>
-                              <th className="px-4 py-3 text-right">Date</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-[#e5e5e5] text-xs">
-                            {caseDetail.evidence.map((ev: any) => 
-                              ev.analyses?.map((an: any) => (
-                                <tr key={an.id} className="hover:bg-slate-50/30">
-                                  <td className="px-4 py-3 font-semibold truncate max-w-[120px]">{ev.original_name}</td>
-                                  <td className="px-4 py-3 font-medium text-[#0a0a0a]/80">{an.model_name}</td>
-                                  <td className="px-4 py-3 font-bold">{(an.confidence_score * 100).toFixed(1)}%</td>
-                                  <td className="px-4 py-3">{renderAIResultBadge(an.result)}</td>
-                                  <td className="px-4 py-3 text-right text-[#0a0a0a]/50">
-                                    {new Date(an.analyzed_at).toLocaleDateString()}
-                                  </td>
-                                </tr>
-                              ))
-                            )}
-                          </tbody>
-                        </table>
+                  {/* AI Manipulation Scans - Investigator Only */}
+                  {isInvestigator && (
+                    <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm overflow-hidden">
+                      <div className="px-5 py-4 border-b border-[#e5e5e5] bg-slate-50/50">
+                        <h3 className="font-bold text-sm">AI Manipulation Scans</h3>
                       </div>
-                    )}
-                  </div>
-
-                  {/* Forensic Reviews (Expert Decisions) */}
-                  <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm">
-                    <div className="px-5 py-4 border-b border-[#e5e5e5] bg-slate-50/50">
-                      <h3 className="font-bold text-sm">Forensic Expert Reviews</h3>
-                    </div>
-                    <div className="p-5 space-y-4">
-                      {caseDetail.forensic_reviews?.length === 0 ? (
-                        <div className="text-center text-xs text-[#0a0a0a]/40 py-4">No expert reviews submitted yet.</div>
+                      
+                      {caseDetail.evidence.every((ev: any) => !ev.analyses || ev.analyses.length === 0) ? (
+                        <div className="p-8 text-center text-xs text-[#0a0a0a]/40">No scans performed. Select evidence to run AI models.</div>
                       ) : (
-                        caseDetail.forensic_reviews.map((rev: ForensicReviewType) => (
-                          <div key={rev.id} className="p-4 border border-[#e5e5e5] rounded bg-slate-50/50 flex flex-col gap-2">
-                            <div className="flex justify-between items-center">
-                              <span className="font-bold text-xs text-[#0a0a0a]">{rev.reviewer_name}</span>
-                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                                rev.decision === "APPROVED" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-rose-50 text-rose-700 border-rose-200"
-                              }`}>{rev.decision}</span>
-                            </div>
-                            <p className="text-xs text-[#0a0a0a]/75 italic">"{rev.observations}"</p>
-                            <span className="text-[10px] text-[#0a0a0a]/40 mt-1 block">Reviewed on {new Date(rev.reviewed_at!).toLocaleString()}</span>
-                          </div>
-                        ))
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left">
+                            <thead>
+                              <tr className="bg-slate-50 border-b border-[#e5e5e5] text-[10px] font-bold text-[#0a0a0a]/60 uppercase">
+                                <th className="px-4 py-3">File Name</th>
+                                <th className="px-4 py-3">Model</th>
+                                <th className="px-4 py-3">Confidence</th>
+                                <th className="px-4 py-3">Result</th>
+                                <th className="px-4 py-3">Date</th>
+                                <th className="px-4 py-3 text-right">Action</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-[#e5e5e5] text-xs">
+                              {caseDetail.evidence.map((ev: any) => 
+                                ev.analyses?.map((an: any) => (
+                                  <tr key={an.id} className="hover:bg-slate-50/30">
+                                    <td className="px-4 py-3 font-semibold truncate max-w-[120px]">{ev.original_name}</td>
+                                    <td className="px-4 py-3 font-medium text-[#0a0a0a]/80">{an.model_name}</td>
+                                    <td className="px-4 py-3 font-bold">{(an.confidence_score * 100).toFixed(1)}%</td>
+                                    <td className="px-4 py-3">{renderAIResultBadge(an.result)}</td>
+                                    <td className="px-4 py-3 text-[#0a0a0a]/50">
+                                      {new Date(an.analyzed_at).toLocaleDateString()}
+                                    </td>
+                                    <td className="px-4 py-3 text-right">
+                                      <button
+                                        onClick={() => {
+                                          setSelectedAnalysisIdForReview(an.id);
+                                          setForensicModalOpen(true);
+                                        }}
+                                        className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-[10px] font-bold rounded"
+                                      >
+                                        Add Review
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
                       )}
                     </div>
-                  </div>
+                  )}
+
+                  {/* Forensic Expert Reviews - Investigator Only */}
+                  {isInvestigator && (
+                    <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm">
+                      <div className="px-5 py-4 border-b border-[#e5e5e5] bg-slate-50/50 flex justify-between items-center">
+                        <h3 className="font-bold text-sm">Forensic Expert Reviews</h3>
+                      </div>
+                      <div className="p-5 space-y-4">
+                        {caseDetail.forensic_reviews?.length === 0 ? (
+                          <div className="text-center text-xs text-[#0a0a0a]/40 py-4">No expert reviews submitted yet.</div>
+                        ) : (
+                          caseDetail.forensic_reviews.map((rev: ForensicReviewType) => (
+                            <div key={rev.id} className="p-4 border border-[#e5e5e5] rounded bg-slate-50/50 flex flex-col gap-2">
+                              <div className="flex justify-between items-center">
+                                <span className="font-bold text-xs text-[#0a0a0a]">{rev.reviewer_name}</span>
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                                  rev.decision === "APPROVED" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-rose-50 text-rose-700 border-rose-200"
+                                }`}>{rev.decision}</span>
+                              </div>
+                              <p className="text-xs text-[#0a0a0a]/75 italic">"{rev.observations}"</p>
+                              <span className="text-[10px] text-[#0a0a0a]/40 mt-1 block">Reviewed on {new Date(rev.reviewed_at!).toLocaleString()}</span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                 </div>
 
-                {/* Right Column (Notes & Reports) */}
-                <div className="space-y-6">
+                {/* Right Column - Sticky Sidebar */}
+                <div className="space-y-6 lg:sticky lg:top-24 lg:self-start">
                   
-                  {/* Case Notes */}
-                  <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm flex flex-col h-[400px]">
-                    <div className="px-5 py-4 border-b border-[#e5e5e5] bg-slate-50/50">
+                  {/* Case Notes (Compact) */}
+                  <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm flex flex-col h-[340px]">
+                    <div className="px-5 py-3.5 border-b border-[#e5e5e5] bg-slate-50/50 flex justify-between items-center">
                       <h3 className="font-bold text-sm">Investigation Notes</h3>
+                      {caseDetail.notes && caseDetail.notes.length > 0 && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-[#0a0a0a]/60 border border-[#e5e5e5]">
+                          {caseDetail.notes.length} Notes
+                        </span>
+                      )}
                     </div>
                     
                     {/* Notes Feed */}
@@ -1899,10 +2314,12 @@ export default function UserDashboard() {
                             ) : (
                               <>
                                 <p className="text-xs text-[#0a0a0a]/80 mt-1 whitespace-pre-wrap">{note.note}</p>
-                                <div className="opacity-0 group-hover:opacity-100 absolute bottom-1 right-2 flex gap-1.5 transition-opacity bg-white/95 px-1 py-0.5 rounded shadow-sm">
-                                  <button onClick={() => startEditNote(note.id, note.note)} className="text-[10px] font-bold text-blue-600 hover:underline">Edit</button>
-                                  <button onClick={() => handleDeleteNote(note.id)} className="text-[10px] font-bold text-rose-600 hover:underline">Delete</button>
-                                </div>
+                                {((isInvestigator && caseDetail.assigned_expert) || caseDetail.status === "DRAFT" || caseDetail.status === "OPEN") && (
+                                  <div className="opacity-0 group-hover:opacity-100 absolute bottom-1 right-2 flex gap-1.5 transition-opacity bg-white/95 px-1 py-0.5 rounded shadow-sm">
+                                    <button onClick={() => startEditNote(note.id, note.note)} className="text-[10px] font-bold text-blue-600 hover:underline">Edit</button>
+                                    <button onClick={() => handleDeleteNote(note.id)} className="text-[10px] font-bold text-rose-600 hover:underline">Delete</button>
+                                  </div>
+                                )}
                               </>
                             )}
                           </div>
@@ -1910,60 +2327,158 @@ export default function UserDashboard() {
                       )}
                     </div>
 
-                    {/* Note submit form */}
-                    <form onSubmit={handleAddNote} className="p-3 border-t border-[#e5e5e5] bg-slate-50 flex gap-2">
-                      <input
-                        type="text"
-                        placeholder="Write a case note..."
-                        value={newNoteText}
-                        onChange={(e) => setNewNoteText(e.target.value)}
-                        className="flex-1 text-xs px-3 py-2 bg-white border border-[#e5e5e5] rounded outline-none focus:ring-1 focus:ring-[#CC2200]"
-                      />
-                      <button
-                        type="submit"
-                        className="px-3 py-2 bg-[#CC2200] text-white rounded text-xs font-bold hover:opacity-95"
-                      >
-                        Add
-                      </button>
-                    </form>
+                    {/* Note submit form - Allowed in Draft or for Assigned Investigator */}
+                    {((isInvestigator && caseDetail.assigned_expert) || caseDetail.status === "DRAFT" || caseDetail.status === "OPEN") && (
+                      <form onSubmit={handleAddNote} className="p-3 border-t border-[#e5e5e5] bg-slate-50 flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="Write a case note..."
+                          value={newNoteText}
+                          onChange={(e) => setNewNoteText(e.target.value)}
+                          className="flex-1 text-xs px-3 py-2 bg-white border border-[#e5e5e5] rounded outline-none focus:ring-1 focus:ring-[#CC2200]"
+                        />
+                        <button
+                          type="submit"
+                          className="px-3 py-2 bg-[#CC2200] text-white rounded text-xs font-bold hover:opacity-95"
+                        >
+                          Add
+                        </button>
+                      </form>
+                    )}
                   </div>
 
-                  {/* Reports generated for case */}
-                  <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm">
-                    <div className="px-5 py-4 border-b border-[#e5e5e5] bg-slate-50/50">
-                      <h3 className="font-bold text-sm">Generated Case Reports</h3>
-                    </div>
-                    <div className="p-4 space-y-2">
-                      {caseDetail.reports.length === 0 ? (
-                        <div className="text-center text-xs text-[#0a0a0a]/40 py-4">No reports generated.</div>
-                      ) : (
-                        caseDetail.reports.map((rep: ReportType) => (
-                          <div key={rep.id} className="p-3 border border-[#e5e5e5] rounded flex items-center justify-between hover:bg-slate-50/30">
-                            <div className="flex items-center gap-2">
-                              <FileText className="h-4 w-4 text-[#CC2200]" />
-                              <div className="text-left">
-                                <span className="text-xs font-bold text-[#0a0a0a]">{rep.report_type} Report</span>
-                                <span className="block text-[9px] text-[#0a0a0a]/40">{new Date(rep.generated_at!).toLocaleDateString()}</span>
+                  {/* Reports generated for case - Investigator Only */}
+                  {isInvestigator && (
+                    <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm">
+                      <div className="px-5 py-4 border-b border-[#e5e5e5] bg-slate-50/50">
+                        <h3 className="font-bold text-sm">Generated Case Reports</h3>
+                      </div>
+                      <div className="p-4 space-y-2">
+                        {caseDetail.reports.length === 0 ? (
+                          <div className="text-center text-xs text-[#0a0a0a]/40 py-4">No reports generated.</div>
+                        ) : (
+                          caseDetail.reports.map((rep: ReportType) => (
+                            <div key={rep.id} className="p-3 border border-[#e5e5e5] rounded flex items-center justify-between hover:bg-slate-50/30">
+                              <div className="flex items-center gap-2">
+                                <FileText className="h-4 w-4 text-[#CC2200]" />
+                                <div className="text-left">
+                                  <span className="text-xs font-bold text-[#0a0a0a]">{rep.report_type} Report</span>
+                                  <span className="block text-[9px] text-[#0a0a0a]/40">{new Date(rep.generated_at!).toLocaleDateString()}</span>
+                                </div>
                               </div>
+                              <a
+                                href={`${BACKEND_URL}${rep.report_file}`}
+                                download
+                                className="p-1 border border-[#e5e5e5] rounded hover:bg-slate-100 text-[#0a0a0a]/60 flex items-center justify-center"
+                                title="Download PDF"
+                              >
+                                <FileDown className="h-3.5 w-3.5" />
+                              </a>
                             </div>
-                            <a
-                              href={`${BACKEND_URL}${rep.report_file}`}
-                              download
-                              className="p-1 border border-[#e5e5e5] rounded hover:bg-slate-100 text-[#0a0a0a]/60 flex items-center justify-center"
-                              title="Download PDF"
-                            >
-                              <FileDown className="h-3.5 w-3.5" />
-                            </a>
-                          </div>
-                        ))
-                      )}
+                          ))
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                 </div>
 
               </div>
 
+            </div>
+          )}
+
+          {/* ──────────────── ALL CASES VIEW (UNASSIGNED FOR INVESTIGATORS) ──────────────── */}
+          {(activeTab === "Open Cases" || activeTab === "All Cases") && !selectedCaseId && (
+            <div className="space-y-6 animate-scale-up">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h1 className="text-2xl font-bold tracking-tight">All Cases</h1>
+                  <p className="text-sm text-[#0a0a0a]/50">Every unassigned case available for digital investigators to claim.</p>
+                </div>
+              </div>
+
+              {/* Search toolbar */}
+              <div className="flex flex-col sm:flex-row gap-3 bg-white p-4 border border-[#e5e5e5] rounded-lg shadow-sm">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#0a0a0a]/40" />
+                  <input
+                    type="text"
+                    placeholder="Search open cases by case #, title, or reporter..."
+                    value={openCasesSearch}
+                    onChange={(e) => { setOpenCasesSearch(e.target.value); setOpenCasesPage(1); }}
+                    className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-[#e5e5e5] rounded-md text-sm outline-none focus:ring-1 focus:ring-[#CC2200] focus:border-[#CC2200] transition-colors"
+                  />
+                </div>
+              </div>
+
+              {/* All Cases Table */}
+              <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm overflow-hidden">
+                {openCasesLoading ? (
+                  <div className="p-8 space-y-4">
+                    {[1, 2, 3, 4].map(i => (
+                      <div key={i} className="animate-pulse flex items-center justify-between h-12 bg-slate-50 rounded px-4">
+                        <div className="h-4 w-24 bg-slate-200 rounded" />
+                        <div className="h-4 w-48 bg-slate-200 rounded" />
+                        <div className="h-4 w-12 bg-slate-200 rounded" />
+                      </div>
+                    ))}
+                  </div>
+                ) : openCases.length === 0 ? (
+                  <div className="p-12 text-center space-y-3">
+                    <ShieldAlert className="h-12 w-12 text-[#0a0a0a]/20 mx-auto" />
+                    <p className="text-base font-bold text-[#0a0a0a]/70">No unassigned open cases available</p>
+                    <p className="text-xs text-[#0a0a0a]/40 max-w-sm mx-auto">
+                      All submitted citizen cases are currently assigned or in draft state.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50/80 border-b border-[#e5e5e5] text-[#0a0a0a]/60 font-bold uppercase text-[11px] tracking-wider">
+                          <th className="py-3.5 px-4">CASE CODE</th>
+                          <th className="py-3.5 px-4">TITLE</th>
+                          <th className="py-3.5 px-4">REPORTED BY</th>
+                          <th className="py-3.5 px-4">INCIDENT DATE</th>
+                          <th className="py-3.5 px-4">SUBMITTED DATE</th>
+                          <th className="py-3.5 px-4">PRIORITY</th>
+                          <th className="py-3.5 px-4 text-center">ACTION</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#e5e5e5]">
+                        {openCases.map((c: any) => (
+                          <tr key={c.id} className="hover:bg-slate-50/50 transition-colors">
+                            <td className="py-3.5 px-4 font-mono font-bold text-[#CC2200]">{c.case_number}</td>
+                            <td className="py-3.5 px-4 font-bold text-[#0a0a0a]">{c.title}</td>
+                            <td className="py-3.5 px-4 text-[#0a0a0a]/80 font-medium">{c.creator_name || "Citizen"}</td>
+                            <td className="py-3.5 px-4 text-[#0a0a0a]/60">
+                              {c.incident_date ? new Date(c.incident_date).toLocaleDateString("en-GB") : "N/A"}
+                            </td>
+                            <td className="py-3.5 px-4 text-[#0a0a0a]/60">
+                              {c.submitted_at ? new Date(c.submitted_at).toLocaleDateString("en-GB") : (c.created_at ? new Date(c.created_at).toLocaleDateString("en-GB") : "N/A")}
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <span className="px-2.5 py-1 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                {c.priority || "MEDIUM"}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4 text-center">
+                              <button
+                                onClick={() => viewCaseDetails(c.id)}
+                                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded bg-slate-800 hover:bg-[#CC2200] text-white text-xs font-bold transition-colors shadow-xs"
+                              >
+                                <Eye className="h-3.5 w-3.5" />
+                                View Case
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -2052,10 +2567,11 @@ export default function UserDashboard() {
                       </button>
                       <button
                         onClick={() => startUploads(parseInt(uploadTargetCaseId))}
-                        disabled={!uploadTargetCaseId}
-                        className="px-5 py-2 rounded bg-[#CC2200] text-white text-xs font-bold shadow hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={!uploadTargetCaseId || isUploadingSingle}
+                        className="px-5 py-2 rounded bg-[#CC2200] text-white text-xs font-bold shadow hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
                       >
-                        Submit Evidence
+                        {isUploadingSingle && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                        {isUploadingSingle ? "Uploading..." : "Submit Evidence"}
                       </button>
                     </div>
                   </div>
@@ -2522,10 +3038,10 @@ export default function UserDashboard() {
             <div className="space-y-6 animate-scale-up text-left">
               <div>
                 <h1 className="text-2xl font-bold tracking-tight">
-                  {session?.user?.role === "INVESTIGATOR" ? "My Profile Settings" : "My Profile"}
+                  {isInvestigator ? "My Profile Settings" : "My Profile"}
                 </h1>
                 <p className="text-sm text-[#0a0a0a]/50">
-                  {session?.user?.role === "INVESTIGATOR" 
+                  {isInvestigator 
                     ? "Manage your investigator credentials, organization, contact info and login password." 
                     : "Manage your personal information and account settings."}
                 </p>
@@ -2547,7 +3063,7 @@ export default function UserDashboard() {
                     <p className="text-xs text-[#0a0a0a]/50 mt-0.5">{session?.user?.email}</p>
                   </div>
                   <div className="px-3 py-1 rounded bg-[#CC2200]/10 text-[#CC2200] text-xs font-bold border border-[#CC2200]/20">
-                    {session?.user?.role === "INVESTIGATOR" ? "Investigator" : "End User"}
+                    {isInvestigator ? "Investigator" : "End User"}
                   </div>
                   
                   <div className="w-full text-xs space-y-2 pt-4 border-t border-[#e5e5e5] text-left text-[#0a0a0a]/60 font-semibold">
@@ -2555,7 +3071,7 @@ export default function UserDashboard() {
                       <span>Status</span>
                       <span className="text-green-600">Active Approved</span>
                     </div>
-                    {session?.user?.role === "INVESTIGATOR" && (
+                    {isInvestigator && (
                       <div className="flex justify-between">
                         <span>Agency</span>
                         <span>{session?.user?.organization || currentProfile?.organization || "N/A"}</span>
@@ -2592,7 +3108,7 @@ export default function UserDashboard() {
                       </div>
                     </div>
 
-                    {session?.user?.role === "INVESTIGATOR" ? (
+                    {isInvestigator ? (
                       <div>
                         <label className="block text-xs font-bold uppercase text-[#0a0a0a]/60 mb-1.5">Organization / Agency</label>
                         <input
@@ -2785,7 +3301,7 @@ export default function UserDashboard() {
       {/* ─── Footer ─── */}
       <footer className="border-t border-[#e5e5e5] bg-white py-6 mt-auto">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-xs text-[#0a0a0a]/40">
-          © {new Date().getFullYear()} DeepGuard. Confident deepfake detection forensic workflows.
+          © {new Date().getFullYear()} Sentinel AI. Confident deepfake detection forensic workflows.
         </div>
       </footer>
 
@@ -2825,30 +3341,14 @@ export default function UserDashboard() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold uppercase text-[#0a0a0a]/60 mb-1">Priority</label>
-                  <select
-                    value={createCaseForm.priority}
-                    onChange={(e) => setCreateCaseForm(prev => ({ ...prev, priority: e.target.value }))}
-                    className="w-full text-sm px-3 py-2 bg-[#fafafa] border border-[#e5e5e5] rounded outline-none text-[#0a0a0a]"
-                  >
-                    <option value="LOW">Low</option>
-                    <option value="MEDIUM">Medium</option>
-                    <option value="HIGH">High</option>
-                    <option value="CRITICAL">Critical</option>
-                  </select>
-                </div>
-                
-                <div>
-                  <label className="block text-xs font-bold uppercase text-[#0a0a0a]/60 mb-1">Incident Date</label>
-                  <input
-                    type="date"
-                    value={createCaseForm.incident_date}
-                    onChange={(e) => setCreateCaseForm(prev => ({ ...prev, incident_date: e.target.value }))}
-                    className="w-full text-sm px-3 py-1.5 bg-[#fafafa] border border-[#e5e5e5] rounded outline-none text-[#0a0a0a]"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-bold uppercase text-[#0a0a0a]/60 mb-1">Incident Date</label>
+                <input
+                  type="date"
+                  value={createCaseForm.incident_date}
+                  onChange={(e) => setCreateCaseForm(prev => ({ ...prev, incident_date: e.target.value }))}
+                  className="w-full text-sm px-3.5 py-2 bg-[#fafafa] border border-[#e5e5e5] rounded outline-none focus:ring-1 focus:ring-[#CC2200] focus:border-[#CC2200]"
+                />
               </div>
 
               <div className="flex justify-end gap-2.5 pt-4 border-t border-[#e5e5e5]">
@@ -2906,27 +3406,13 @@ export default function UserDashboard() {
                 />
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-xs font-bold uppercase text-[#0a0a0a]/60 mb-1">Priority</label>
-                  <select
-                    value={editCaseForm.priority}
-                    onChange={(e) => setEditCaseForm(prev => ({ ...prev, priority: e.target.value }))}
-                    className="w-full text-sm px-2 py-2 bg-[#fafafa] border border-[#e5e5e5] rounded outline-none text-[#0a0a0a]"
-                  >
-                    <option value="LOW">Low</option>
-                    <option value="MEDIUM">Medium</option>
-                    <option value="HIGH">High</option>
-                    <option value="CRITICAL">Critical</option>
-                  </select>
-                </div>
-
+              <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold uppercase text-[#0a0a0a]/60 mb-1">Status</label>
                   <select
                     value={editCaseForm.status}
                     onChange={(e) => setEditCaseForm(prev => ({ ...prev, status: e.target.value }))}
-                    className="w-full text-sm px-2 py-2 bg-[#fafafa] border border-[#e5e5e5] rounded outline-none text-[#0a0a0a]"
+                    className="w-full text-sm px-3 py-2 bg-[#fafafa] border border-[#e5e5e5] rounded outline-none text-[#0a0a0a]"
                   >
                     <option value="OPEN">Open</option>
                     <option value="UNDER_ANALYSIS">Under Analysis</option>
@@ -2941,7 +3427,7 @@ export default function UserDashboard() {
                     type="date"
                     value={editCaseForm.incident_date}
                     onChange={(e) => setEditCaseForm(prev => ({ ...prev, incident_date: e.target.value }))}
-                    className="w-full text-[11px] px-1 py-2 bg-[#fafafa] border border-[#e5e5e5] rounded outline-none text-[#0a0a0a]"
+                    className="w-full text-sm px-3 py-1.5 bg-[#fafafa] border border-[#e5e5e5] rounded outline-none text-[#0a0a0a]"
                   />
                 </div>
               </div>
@@ -2983,33 +3469,30 @@ export default function UserDashboard() {
 
             {/* Media Content Preview area */}
             <div className="flex-1 overflow-y-auto p-6 bg-slate-950 flex items-center justify-center min-h-[300px]">
-              {previewFile.file_type === "IMAGE" && (
+              {(previewFile.file_type?.toUpperCase() === "IMAGE" || previewFile.mime_type?.startsWith("image/")) ? (
                 <img
-                  src={`${BACKEND_URL}/uploads/${previewFile.file_name}`}
+                  src={previewFile.file_name.startsWith("http") ? previewFile.file_name : `${BACKEND_URL}/uploads/${previewFile.file_name}`}
                   alt={previewFile.original_name}
-                  className="max-h-[50vh] object-contain rounded"
+                  className="max-h-[55vh] max-w-full object-contain rounded shadow-lg"
                 />
-              )}
-              {previewFile.file_type === "VIDEO" && (
+              ) : (previewFile.file_type?.toUpperCase() === "VIDEO" || previewFile.mime_type?.startsWith("video/")) ? (
                 <video
-                  src={`${BACKEND_URL}/uploads/${previewFile.file_name}`}
+                  src={previewFile.file_name.startsWith("http") ? previewFile.file_name : `${BACKEND_URL}/uploads/${previewFile.file_name}`}
                   controls
-                  className="max-h-[50vh] max-w-full rounded"
+                  className="max-h-[55vh] max-w-full rounded shadow-lg"
                 />
-              )}
-              {previewFile.file_type === "AUDIO" && (
+              ) : (previewFile.file_type?.toUpperCase() === "AUDIO" || previewFile.mime_type?.startsWith("audio/")) ? (
                 <audio
-                  src={`${BACKEND_URL}/uploads/${previewFile.file_name}`}
+                  src={previewFile.file_name.startsWith("http") ? previewFile.file_name : `${BACKEND_URL}/uploads/${previewFile.file_name}`}
                   controls
                   className="w-full max-w-md"
                 />
-              )}
-              {previewFile.file_type === "DOCUMENT" && (
+              ) : (
                 <div className="text-center text-white space-y-3">
                   <FileText className="h-16 w-16 text-[#CC2200] mx-auto" />
-                  <p className="text-sm font-semibold">Document File Preview not supported in sandbox browser</p>
+                  <p className="text-sm font-semibold">Document File Preview</p>
                   <a
-                    href={`${BACKEND_URL}/uploads/${previewFile.file_name}`}
+                    href={previewFile.file_name.startsWith("http") ? previewFile.file_name : `${BACKEND_URL}/uploads/${previewFile.file_name}`}
                     target="_blank"
                     rel="noreferrer"
                     className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#CC2200] rounded text-xs font-bold text-white hover:opacity-90"
@@ -3063,6 +3546,174 @@ export default function UserDashboard() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+      {/* ──────────────── SUBMIT CASE CONFIRMATION MODAL ──────────────── */}
+      {isSubmitConfirmModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-white border border-[#e5e5e5] rounded-xl shadow-2xl max-w-md w-full p-6 animate-scale-up text-left space-y-4">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-10 h-10 rounded-full bg-rose-100 flex items-center justify-center flex-shrink-0">
+                <AlertTriangle className="h-5 w-5 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-[#0a0a0a]">Submit Case for Investigation?</h3>
+                <p className="text-xs text-[#0a0a0a]/50">Case #{caseDetail?.case_number}</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5 text-xs text-[#0a0a0a]/80 space-y-2">
+              <p className="font-bold text-slate-900">After submission, this case will be locked & immutable:</p>
+              <ul className="list-disc pl-4 space-y-1 text-slate-600">
+                <li>No new evidence files can be uploaded</li>
+                <li>Uploaded evidence cannot be removed or deleted</li>
+                <li>Investigation notes cannot be edited or deleted</li>
+                <li>Case details cannot be modified</li>
+              </ul>
+              <p className="font-semibold text-rose-700 pt-1">This action cannot be undone.</p>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsSubmitConfirmModalOpen(false)}
+                className="px-4 py-2 border border-[#e5e5e5] rounded-md text-xs font-semibold hover:bg-slate-100"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSubmitCaseForReview}
+                disabled={submitting}
+                className="px-5 py-2 bg-[#CC2200] text-white rounded-md text-xs font-bold shadow hover:opacity-90 disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+              >
+                {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                Confirm Submission
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ──────────────── CLAIM CONFIRMATION MODAL ──────────────── */}
+      {(isClaimConfirmModalOpen || isOpenConfirmModalOpen) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in text-left">
+          <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-2xl border border-[#e5e5e5] space-y-4 animate-scale-up">
+            <div className="flex items-center gap-3 text-[#CC2200]">
+              <div className="p-2 bg-[#CC2200]/10 rounded-full">
+                <ShieldCheck className="h-6 w-6 text-[#CC2200]" />
+              </div>
+              <div>
+                <h3 className="font-bold text-lg text-[#0a0a0a]">Take Ownership of Investigation</h3>
+                {caseDetail?.case_number && (
+                  <p className="text-xs text-[#0a0a0a]/50">Case #{caseDetail.case_number}</p>
+                )}
+              </div>
+            </div>
+            
+            <div className="space-y-3 text-xs text-[#0a0a0a]/80 bg-slate-50 p-4 rounded-lg border border-[#e5e5e5]">
+              <p className="font-semibold text-sm text-[#0a0a0a]">You are about to take ownership of this investigation.</p>
+              <p className="text-[#0a0a0a]/60 font-semibold">After accepting:</p>
+              <ul className="space-y-1.5 list-disc pl-5 text-[#0a0a0a]/75 leading-relaxed">
+                <li>The case will be assigned to you.</li>
+                <li>Other investigators will no longer be able to investigate this case.</li>
+                <li>The case will move to your Assigned Cases.</li>
+                <li>This action cannot be undone without administrator intervention.</li>
+              </ul>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#e5e5e5]">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsClaimConfirmModalOpen(false);
+                  setIsOpenConfirmModalOpen(false);
+                }}
+                disabled={submitting}
+                className="px-4 py-2 border border-[#e5e5e5] rounded-md text-xs font-bold text-[#0a0a0a]/70 hover:bg-slate-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleClaimCase}
+                disabled={submitting}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#CC2200] hover:bg-[#a81c00] text-white rounded-md text-xs font-bold transition-colors shadow-xs"
+              >
+                {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+                {submitting ? "Claiming..." : "Start Investigation"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ──────────────── CASE ALREADY CLAIMED MODAL ──────────────── */}
+      {isAlreadyClaimedModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in text-left">
+          <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-2xl border border-[#e5e5e5] space-y-4 animate-scale-up">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="p-2 bg-rose-50 rounded-full">
+                <AlertTriangle className="h-6 w-6 text-rose-600" />
+              </div>
+              <h3 className="font-bold text-lg text-[#0a0a0a]">Case Already Claimed</h3>
+            </div>
+            <p className="text-xs text-[#0a0a0a]/80 leading-relaxed bg-rose-50/50 p-3.5 rounded border border-rose-100 font-medium">
+              This case has already been assigned to another investigator.
+            </p>
+            <div className="flex items-center justify-end pt-3 border-t border-[#e5e5e5]">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAlreadyClaimedModalOpen(false);
+                  setSelectedCaseId(null);
+                  setCaseDetail(null);
+                  navigateTo("All Cases" as any);
+                }}
+                className="px-4 py-2 bg-[#CC2200] hover:bg-[#a81c00] text-white rounded-md text-xs font-bold transition-colors shadow-xs"
+              >
+                Return to All Cases
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ──────────────── MAXIMUM CASE LIMIT REACHED MODAL ──────────────── */}
+      {isLimitModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in text-left">
+          <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-2xl border border-[#e5e5e5] space-y-4 animate-scale-up">
+            <div className="flex items-center gap-3 text-amber-600">
+              <div className="p-2 bg-amber-50 rounded-full">
+                <ShieldAlert className="h-6 w-6" />
+              </div>
+              <h3 className="font-bold text-lg text-[#0a0a0a]">Maximum Active Investigations Reached</h3>
+            </div>
+            <p className="text-xs text-[#0a0a0a]/80 leading-relaxed bg-amber-50/50 p-3.5 rounded border border-amber-100 font-medium">
+              You already have two active investigations assigned. Complete or close one before accepting another investigation.
+            </p>
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#e5e5e5]">
+              <button
+                type="button"
+                onClick={() => setIsLimitModalOpen(false)}
+                className="px-4 py-2 border border-[#e5e5e5] rounded-md text-xs font-bold text-[#0a0a0a]/70 hover:bg-slate-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsLimitModalOpen(false);
+                  setSelectedCaseId(null);
+                  setCaseDetail(null);
+                  navigateTo("Assigned Cases" as any);
+                }}
+                className="px-4 py-2 bg-[#CC2200] hover:bg-[#a81c00] text-white rounded-md text-xs font-bold transition-colors shadow-xs"
+              >
+                View Assigned Cases
+              </button>
+            </div>
           </div>
         </div>
       )}

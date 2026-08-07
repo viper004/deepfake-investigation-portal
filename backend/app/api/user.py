@@ -12,8 +12,8 @@ from jose import jwt, JWTError
 from app.database.database import SessionLocal
 from app.models.models import (
     InvestigationCase, EvidenceFile, MediaMetadata, AIModel, AIAnalysis,
-    ForensicReview, InvestigationNote, Report, Notification,
-    PriorityEnum, StatusEnum, FileTypeEnum, AIResultEnum, ReportTypeEnum, MediaTypeEnum
+    ForensicReview, InvestigationNote, Report, Notification, AuditLog,
+    StatusEnum, FileTypeEnum, AIResultEnum, ReportTypeEnum, MediaTypeEnum
 )
 from app.models.user import User
 from app.utils.auth import SECRET_KEY, ALGORITHM, get_password_hash
@@ -59,6 +59,28 @@ def get_current_user(authorization: str = Header(None), db: Session = Depends(ge
             detail="Invalid or expired session token"
         )
 
+def is_admin(user: User) -> bool:
+    return user.role_id == 1 or (user.role and user.role.role_name == "ADMIN")
+
+def is_investigator(user: User) -> bool:
+    return user.role_id == 2 or (user.role and user.role.role_name in ["INVESTIGATOR", "EXPERT"])
+
+def is_investigator_or_admin(user: User) -> bool:
+    return is_admin(user) or is_investigator(user)
+
+def log_audit_event(db: Session, case_id: Optional[int], user_id: int, action: str, description: str):
+    try:
+        audit = AuditLog(
+            case_id=case_id,
+            user_id=user_id,
+            action=action,
+            description=description
+        )
+        db.add(audit)
+        db.commit()
+    except Exception as e:
+        print("Failed to log audit event:", e)
+
 def add_user_notification(db: Session, user_id: int, title: str, message: str):
     try:
         notif = Notification(user_id=user_id, title=title, message=message, read=False)
@@ -74,31 +96,78 @@ def get_user_stats(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    total_cases = db.query(InvestigationCase).filter(InvestigationCase.created_by == user.id).count()
-    open_cases = db.query(InvestigationCase).filter(
-        InvestigationCase.created_by == user.id,
-        InvestigationCase.status == StatusEnum.OPEN
-    ).count()
-    under_analysis = db.query(InvestigationCase).filter(
-        InvestigationCase.created_by == user.id,
-        InvestigationCase.status == StatusEnum.UNDER_ANALYSIS
-    ).count()
-    closed_cases = db.query(InvestigationCase).filter(
-        InvestigationCase.created_by == user.id,
-        InvestigationCase.status == StatusEnum.CLOSED
-    ).count()
-    
-    evidence_uploaded = db.query(EvidenceFile).filter(EvidenceFile.uploaded_by == user.id).count()
-    
-    # AI Analyses count
-    ai_completed = db.query(AIAnalysis).join(EvidenceFile).filter(
-        EvidenceFile.uploaded_by == user.id
-    ).count()
-    
-    # Reports generated count
-    reports_count = db.query(Report).filter(Report.generated_by == user.id).count()
+    if is_admin(user):
+        available_cases = db.query(InvestigationCase).filter(
+            InvestigationCase.status == StatusEnum.CASE_FILED,
+            InvestigationCase.assigned_expert == None
+        ).count()
+        total_cases = db.query(InvestigationCase).count()
+        open_cases = db.query(InvestigationCase).filter(
+            InvestigationCase.status.in_([StatusEnum.CASE_FILED, StatusEnum.CASE_OPENED, StatusEnum.OPEN])
+        ).count()
+        under_analysis = db.query(InvestigationCase).filter(InvestigationCase.status == StatusEnum.UNDER_ANALYSIS).count()
+        closed_cases = db.query(InvestigationCase).filter(InvestigationCase.status == StatusEnum.CLOSED).count()
+        evidence_uploaded = db.query(EvidenceFile).count()
+        ai_completed = db.query(AIAnalysis).count()
+        reports_count = db.query(Report).count()
+        assigned_cases = open_cases
+    elif is_investigator(user):
+        available_cases = db.query(InvestigationCase).filter(
+            InvestigationCase.status == StatusEnum.CASE_FILED,
+            InvestigationCase.assigned_expert == None
+        ).count()
+        assigned_cases = db.query(InvestigationCase).filter(
+            InvestigationCase.assigned_expert == user.id,
+            InvestigationCase.status.in_([
+                StatusEnum.CASE_OPENED,
+                StatusEnum.UNDER_ANALYSIS,
+                StatusEnum.EXPERT_REVIEW,
+                StatusEnum.OPEN,
+                StatusEnum.REVIEW
+            ])
+        ).count()
+        total_cases = db.query(InvestigationCase).filter(InvestigationCase.assigned_expert == user.id).count()
+        open_cases = assigned_cases
+        under_analysis = db.query(InvestigationCase).filter(
+            InvestigationCase.assigned_expert == user.id,
+            InvestigationCase.status == StatusEnum.UNDER_ANALYSIS
+        ).count()
+        closed_cases = db.query(InvestigationCase).filter(
+            InvestigationCase.assigned_expert == user.id,
+            InvestigationCase.status == StatusEnum.CLOSED
+        ).count()
+        evidence_uploaded = db.query(EvidenceFile).join(InvestigationCase).filter(
+            InvestigationCase.assigned_expert == user.id
+        ).count()
+        ai_completed = db.query(AIAnalysis).join(EvidenceFile).join(InvestigationCase).filter(
+            InvestigationCase.assigned_expert == user.id
+        ).count()
+        reports_count = db.query(Report).filter(Report.generated_by == user.id).count()
+    else:
+        available_cases = 0
+        assigned_cases = 0
+        total_cases = db.query(InvestigationCase).filter(InvestigationCase.created_by == user.id).count()
+        open_cases = db.query(InvestigationCase).filter(
+            InvestigationCase.created_by == user.id,
+            InvestigationCase.status.in_([StatusEnum.CASE_FILED, StatusEnum.CASE_OPENED, StatusEnum.OPEN])
+        ).count()
+        under_analysis = db.query(InvestigationCase).filter(
+            InvestigationCase.created_by == user.id,
+            InvestigationCase.status == StatusEnum.UNDER_ANALYSIS
+        ).count()
+        closed_cases = db.query(InvestigationCase).filter(
+            InvestigationCase.created_by == user.id,
+            InvestigationCase.status == StatusEnum.CLOSED
+        ).count()
+        evidence_uploaded = db.query(EvidenceFile).filter(EvidenceFile.uploaded_by == user.id).count()
+        ai_completed = db.query(AIAnalysis).join(EvidenceFile).filter(
+            EvidenceFile.uploaded_by == user.id
+        ).count()
+        reports_count = db.query(Report).filter(Report.generated_by == user.id).count()
     
     return {
+        "availableCases": available_cases,
+        "assignedCases": assigned_cases,
         "totalCases": total_cases,
         "openCases": open_cases,
         "underAnalysis": under_analysis,
@@ -114,10 +183,30 @@ def get_user_recent(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    # Recent Cases
-    cases = db.query(InvestigationCase).filter(
-        InvestigationCase.created_by == user.id
-    ).order_by(desc(InvestigationCase.created_at)).limit(5).all()
+    if is_admin(user):
+        cases = db.query(InvestigationCase).order_by(desc(InvestigationCase.created_at)).limit(5).all()
+        uploads = db.query(EvidenceFile).order_by(desc(EvidenceFile.upload_time)).limit(5).all()
+        ai_results = db.query(AIAnalysis).order_by(desc(AIAnalysis.analyzed_at)).limit(5).all()
+    elif is_investigator(user):
+        cases = db.query(InvestigationCase).filter(
+            InvestigationCase.assigned_expert == user.id
+        ).order_by(desc(InvestigationCase.created_at)).limit(5).all()
+        uploads = db.query(EvidenceFile).join(InvestigationCase).filter(
+            InvestigationCase.assigned_expert == user.id
+        ).order_by(desc(EvidenceFile.upload_time)).limit(5).all()
+        ai_results = db.query(AIAnalysis).join(EvidenceFile).join(InvestigationCase).filter(
+            InvestigationCase.assigned_expert == user.id
+        ).order_by(desc(AIAnalysis.analyzed_at)).limit(5).all()
+    else:
+        cases = db.query(InvestigationCase).filter(
+            InvestigationCase.created_by == user.id
+        ).order_by(desc(InvestigationCase.created_at)).limit(5).all()
+        uploads = db.query(EvidenceFile).filter(
+            EvidenceFile.uploaded_by == user.id
+        ).order_by(desc(EvidenceFile.upload_time)).limit(5).all()
+        ai_results = db.query(AIAnalysis).join(EvidenceFile).filter(
+            EvidenceFile.uploaded_by == user.id
+        ).order_by(desc(AIAnalysis.analyzed_at)).limit(5).all()
     
     cases_list = []
     for c in cases:
@@ -126,15 +215,9 @@ def get_user_recent(
             "case_number": c.case_number,
             "title": c.title,
             "status": c.status.value,
-            "priority": c.priority.value,
             "created_at": c.created_at.isoformat() if c.created_at else None
         })
         
-    # Recent Uploads
-    uploads = db.query(EvidenceFile).filter(
-        EvidenceFile.uploaded_by == user.id
-    ).order_by(desc(EvidenceFile.upload_time)).limit(5).all()
-    
     uploads_list = []
     for u in uploads:
         uploads_list.append({
@@ -146,23 +229,17 @@ def get_user_recent(
             "upload_time": u.upload_time.isoformat() if u.upload_time else None
         })
         
-    # Latest AI Results
-    ai_results = db.query(AIAnalysis).join(EvidenceFile).filter(
-        EvidenceFile.uploaded_by == user.id
-    ).order_by(desc(AIAnalysis.analyzed_at)).limit(5).all()
-    
     ai_list = []
     for a in ai_results:
         ai_list.append({
             "id": a.id,
-            "file_name": a.evidence.original_name,
-            "model_name": a.model.model_name,
-            "result": a.result.value,
+            "file_name": a.evidence.original_name if a.evidence else "N/A",
+            "model_name": a.model.model_name if a.model else "AI Detector",
+            "result": a.result.value if a.result else "N/A",
             "confidence_score": a.confidence_score,
             "analyzed_at": a.analyzed_at.isoformat() if a.analyzed_at else None
         })
         
-    # Recent Reports
     reports = db.query(Report).filter(
         Report.generated_by == user.id
     ).order_by(desc(Report.generated_at)).limit(5).all()
@@ -177,7 +254,6 @@ def get_user_recent(
             "generated_at": r.generated_at.isoformat() if r.generated_at else None
         })
         
-    # Recent Notifications
     notifications = db.query(Notification).filter(
         Notification.user_id == user.id
     ).order_by(desc(Notification.created_at)).limit(10).all()
@@ -205,14 +281,26 @@ def get_user_recent(
 def get_cases(
     search: Optional[str] = None,
     status_filter: Optional[str] = None,
-    priority_filter: Optional[str] = None,
+    scope: Optional[str] = None,
     sort_by: Optional[str] = "newest",
     page: int = 1,
     limit: int = 10,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    query = db.query(InvestigationCase).filter(InvestigationCase.created_by == user.id)
+    if scope == "open_cases":
+        if not is_investigator_or_admin(user):
+            raise HTTPException(status_code=403, detail="Access denied: Only investigators can view open unassigned cases.")
+        query = db.query(InvestigationCase).filter(
+            InvestigationCase.status == StatusEnum.CASE_FILED,
+            InvestigationCase.assigned_expert == None
+        )
+    elif is_admin(user):
+        query = db.query(InvestigationCase)
+    elif is_investigator(user):
+        query = db.query(InvestigationCase).filter(InvestigationCase.assigned_expert == user.id)
+    else:
+        query = db.query(InvestigationCase).filter(InvestigationCase.created_by == user.id)
     
     if search:
         search_term = f"%{search}%"
@@ -224,11 +312,8 @@ def get_cases(
             )
         )
         
-    if status_filter:
+    if status_filter and status_filter.upper() != "ALL":
         query = query.filter(InvestigationCase.status == status_filter.upper())
-        
-    if priority_filter:
-        query = query.filter(InvestigationCase.priority == priority_filter.upper())
         
     if sort_by == "oldest":
         query = query.order_by(InvestigationCase.id)
@@ -241,15 +326,90 @@ def get_cases(
     
     cases_list = []
     for c in cases:
+        total_ev = len(c.evidence_files) if c.evidence_files else 0
+        analyzed_ev = sum(1 for ef in (c.evidence_files or []) if ef.analyses)
+        ai_prog = f"{analyzed_ev}/{total_ev} Scanned" if total_ev > 0 else "Pending AI"
         cases_list.append({
             "id": c.id,
             "case_number": c.case_number,
             "title": c.title,
             "description": c.description,
             "status": c.status.value,
-            "priority": c.priority.value,
+            "priority": "MEDIUM",
+            "ai_progress": ai_prog,
             "incident_date": c.incident_date.isoformat() if c.incident_date else None,
-            "created_at": c.created_at.isoformat() if c.created_at else None
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "submitted_at": c.submitted_at.isoformat() if c.submitted_at else (c.created_at.isoformat() if c.created_at else None),
+            "opened_at": c.opened_at.isoformat() if c.opened_at else None,
+            "updated_at": c.updated_at.isoformat() if c.updated_at else (c.created_at.isoformat() if c.created_at else None),
+            "assigned_expert_id": c.assigned_expert,
+            "assigned_expert_name": c.expert.full_name if c.expert else None,
+            "created_by": c.created_by,
+            "creator_name": c.creator.full_name if c.creator else "Anonymous Reporter",
+            "evidence_count": total_ev
+        })
+        
+    return {
+        "cases": cases_list,
+        "total": total,
+        "page": page,
+        "limit": limit
+    }
+
+@router.get("/cases/open-cases")
+@router.get("/open-cases")
+def get_open_cases(
+    search: Optional[str] = None,
+    sort_by: Optional[str] = "newest",
+    page: int = 1,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    if not is_investigator_or_admin(user):
+        raise HTTPException(status_code=403, detail="Access denied: Only investigators can view open unassigned cases.")
+        
+    query = db.query(InvestigationCase).filter(
+        InvestigationCase.status == StatusEnum.CASE_FILED,
+        InvestigationCase.assigned_expert == None
+    )
+    
+    if search:
+        search_term = f"%{search}%"
+        query = query.filter(
+            or_(
+                InvestigationCase.case_number.like(search_term),
+                InvestigationCase.title.like(search_term),
+                InvestigationCase.description.like(search_term)
+            )
+        )
+        
+    if sort_by == "oldest":
+        query = query.order_by(InvestigationCase.id)
+    else:
+        query = query.order_by(desc(InvestigationCase.created_at))
+        
+    total = query.count()
+    offset = (page - 1) * limit
+    cases = query.offset(offset).limit(limit).all()
+    
+    cases_list = []
+    for c in cases:
+        total_ev = len(c.evidence_files) if c.evidence_files else 0
+        cases_list.append({
+            "id": c.id,
+            "case_number": c.case_number,
+            "title": c.title,
+            "description": c.description,
+            "status": c.status.value,
+            "priority": "MEDIUM",
+            "incident_date": c.incident_date.isoformat() if c.incident_date else None,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "submitted_at": c.submitted_at.isoformat() if c.submitted_at else (c.created_at.isoformat() if c.created_at else None),
+            "updated_at": c.updated_at.isoformat() if c.updated_at else (c.created_at.isoformat() if c.created_at else None),
+            "created_by": c.created_by,
+            "creator_name": c.creator.full_name if c.creator else "Anonymous Reporter",
+            "evidence_count": total_ev
         })
         
     return {
@@ -263,20 +423,12 @@ def get_cases(
 def create_case(
     title: str = Form(...),
     description: str = Form(...),
-    priority: str = Form("MEDIUM"),
     incident_date: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    # Generate unique case number
     case_num = f"CASE-{datetime.now().strftime('%y%m%d%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
     
-    p_enum = PriorityEnum.MEDIUM
-    try:
-        p_enum = PriorityEnum[priority.upper()]
-    except:
-        pass
-        
     inc_date = None
     if incident_date:
         try:
@@ -289,8 +441,7 @@ def create_case(
         title=title,
         description=description,
         created_by=user.id,
-        priority=p_enum,
-        status=StatusEnum.OPEN,
+        status=StatusEnum.DRAFT,
         incident_date=inc_date
     )
     
@@ -298,9 +449,11 @@ def create_case(
     db.commit()
     db.refresh(new_case)
     
+    log_audit_event(db, new_case.id, user.id, "Case Created", f"Case {case_num} created by {user.full_name} in DRAFT state.")
+    
     add_user_notification(
         db, user.id, "Case Created",
-        f"Case {case_num} ({title}) has been created successfully."
+        f"Draft Case {case_num} ({title}) has been created successfully."
     )
     
     return {
@@ -308,12 +461,13 @@ def create_case(
         "case": {
             "id": new_case.id,
             "case_number": new_case.case_number,
-            "title": new_case.title
+            "title": new_case.title,
+            "status": new_case.status.value
         }
     }
 
-@router.get("/cases/{case_id}")
-def get_case_detail(
+@router.post("/cases/{case_id}/submit")
+def submit_case(
     case_id: int,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
@@ -325,6 +479,110 @@ def get_case_detail(
     
     if not c:
         raise HTTPException(status_code=404, detail="Case not found or access denied")
+        
+    if c.status not in [StatusEnum.DRAFT, StatusEnum.OPEN]:
+        raise HTTPException(status_code=400, detail="Case has already been submitted for review.")
+        
+    if len(c.evidence_files) == 0:
+        raise HTTPException(status_code=400, detail="At least one evidence file must be uploaded before submission.")
+        
+    if len(c.notes) == 0:
+        raise HTTPException(status_code=400, detail="Investigation notes cannot be empty before submission.")
+        
+    c.status = StatusEnum.CASE_FILED
+    c.submitted_at = datetime.now(timezone.utc)
+    db.commit()
+    
+    log_audit_event(db, c.id, user.id, "Case Submitted", "Case submitted for investigation review.")
+    add_user_notification(
+        db, user.id, "Case Submitted",
+        f"Case {c.case_number} has been submitted for investigation review."
+    )
+    
+    return {
+        "message": "Case submitted successfully",
+        "status": c.status.value,
+        "submitted_at": c.submitted_at.isoformat()
+    }
+
+@router.post("/cases/{case_id}/open")
+def open_case(
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    if not is_investigator_or_admin(user):
+        raise HTTPException(status_code=403, detail="Only investigators can open and claim investigation cases.")
+        
+    # Concurrency control via row locking
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).with_for_update().first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+        
+    # Prevent multi-investigator race conditions
+    if c.assigned_expert is not None or c.status != StatusEnum.CASE_FILED:
+        raise HTTPException(
+            status_code=409,
+            detail="This case has already been assigned to another investigator."
+        )
+        
+    # Enforce Investigator Limit: Max 2 simultaneous active investigations
+    active_cases_count = db.query(InvestigationCase).filter(
+        InvestigationCase.assigned_expert == user.id,
+        InvestigationCase.status.in_([
+            StatusEnum.CASE_OPENED,
+            StatusEnum.UNDER_ANALYSIS,
+            StatusEnum.EXPERT_REVIEW,
+            StatusEnum.OPEN,
+            StatusEnum.REVIEW
+        ])
+    ).count()
+    
+    if active_cases_count >= 2:
+        raise HTTPException(
+            status_code=400,
+            detail="LIMIT_REACHED: Maximum active investigations reached. You already have 2 active investigation cases assigned."
+        )
+        
+    c.status = StatusEnum.CASE_OPENED
+    c.opened_at = datetime.now(timezone.utc)
+    c.assigned_expert = user.id
+    db.commit()
+    
+    log_audit_event(db, c.id, user.id, "Case Opened", f"Investigation accepted by {user.full_name}")
+    if c.created_by:
+        add_user_notification(
+            db, c.created_by, "Case Opened",
+            f"Your case {c.case_number} has been opened by investigator {user.full_name}."
+        )
+        
+    return {
+        "message": "Case opened successfully",
+        "status": c.status.value,
+        "opened_at": c.opened_at.isoformat()
+    }
+
+@router.get("/cases/{case_id}")
+def get_case_detail(
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+        
+    # Strictly enforce case access permission based on user role
+    if is_admin(user):
+        pass
+    elif is_investigator(user):
+        is_assigned = (c.assigned_expert == user.id)
+        is_unassigned_open = (c.status == StatusEnum.CASE_FILED and c.assigned_expert is None)
+        if not (is_assigned or is_unassigned_open):
+            raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this case.")
+    else:
+        if c.created_by != user.id:
+            raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this case.")
         
     # Get Evidence
     evidence_list = []
@@ -346,8 +604,8 @@ def get_case_detail(
         for a in e.analyses:
             analyses_list.append({
                 "id": a.id,
-                "model_name": a.model.model_name,
-                "version": a.model.version,
+                "model_name": a.model.model_name if a.model else "AI Model",
+                "version": a.model.version if a.model else "1.0",
                 "result": a.result.value,
                 "confidence_score": a.confidence_score,
                 "processing_time": a.processing_time,
@@ -376,7 +634,7 @@ def get_case_detail(
     for r in reviews:
         reviews_list.append({
             "id": r.id,
-            "reviewer_name": r.reviewer.full_name,
+            "reviewer_name": r.reviewer.full_name if r.reviewer else "Expert Reviewer",
             "decision": r.decision.value,
             "observations": r.observations,
             "reviewed_at": r.reviewed_at.isoformat() if r.reviewed_at else None
@@ -389,7 +647,7 @@ def get_case_detail(
             "id": n.id,
             "note": n.note,
             "user_id": n.user_id,
-            "user_name": n.user.full_name,
+            "user_name": n.user.full_name if n.user else "User",
             "created_at": n.created_at.isoformat() if n.created_at else None
         })
         
@@ -402,20 +660,38 @@ def get_case_detail(
             "report_file": r.report_file,
             "generated_at": r.generated_at.isoformat() if r.generated_at else None
         })
+
+    # Get Audit Logs
+    audit_logs_list = []
+    if hasattr(c, "audit_logs"):
+        for a in sorted(c.audit_logs, key=lambda x: x.timestamp, reverse=True):
+            audit_logs_list.append({
+                "id": a.id,
+                "action": a.action,
+                "description": a.description,
+                "user_name": a.user.full_name if a.user else "System",
+                "timestamp": a.timestamp.isoformat() if a.timestamp else None
+            })
         
     return {
         "id": c.id,
         "case_number": c.case_number,
         "title": c.title,
         "description": c.description,
-        "priority": c.priority.value,
         "status": c.status.value,
         "incident_date": c.incident_date.isoformat() if c.incident_date else None,
         "created_at": c.created_at.isoformat() if c.created_at else None,
+        "submitted_at": c.submitted_at.isoformat() if c.submitted_at else None,
+        "opened_at": c.opened_at.isoformat() if c.opened_at else None,
+        "assigned_expert_id": c.assigned_expert,
+        "assigned_expert_name": c.expert.full_name if c.expert else None,
+        "created_by": c.created_by,
+        "creator_name": c.creator.full_name if c.creator else None,
         "evidence": evidence_list,
         "forensic_reviews": reviews_list,
         "notes": notes_list,
-        "reports": reports_list
+        "reports": reports_list,
+        "audit_logs": audit_logs_list
     }
 
 @router.put("/cases/{case_id}")
@@ -423,28 +699,29 @@ def update_case(
     case_id: int,
     title: str = Form(...),
     description: str = Form(...),
-    priority: str = Form(...),
     status: str = Form(...),
     incident_date: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    c = db.query(InvestigationCase).filter(
-        InvestigationCase.id == case_id,
-        InvestigationCase.created_by == user.id
-    ).first()
-    
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
     if not c:
-        raise HTTPException(status_code=404, detail="Case not found or access denied")
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    if is_admin(user):
+        pass
+    elif is_investigator(user):
+        if c.assigned_expert != user.id:
+            raise HTTPException(status_code=403, detail="Forbidden: You cannot modify investigations assigned to another investigator.")
+    else:
+        if c.created_by != user.id:
+            raise HTTPException(status_code=403, detail="Forbidden: Access denied to this case.")
+        if c.status not in [StatusEnum.DRAFT, StatusEnum.OPEN]:
+            raise HTTPException(status_code=403, detail="Submitted cases cannot be modified.")
         
     c.title = title
     c.description = description
     
-    try:
-        c.priority = PriorityEnum[priority.upper()]
-    except:
-        pass
-        
     old_status = c.status
     try:
         c.status = StatusEnum[status.upper()]
@@ -460,6 +737,9 @@ def update_case(
     db.commit()
     
     if old_status != c.status:
+        log_audit_event(db, c.id, user.id, f"Status Changed to {c.status.value}", f"Case status updated from {old_status.value} to {c.status.value}.")
+        if c.status == StatusEnum.CLOSED:
+            log_audit_event(db, c.id, user.id, "Case Closed", f"Case {c.case_number} closed.")
         add_user_notification(
             db, user.id, "Case Status Changed",
             f"Case {c.case_number} status updated from {old_status.value} to {c.status.value}."
@@ -475,13 +755,20 @@ def add_case_note(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    c = db.query(InvestigationCase).filter(
-        InvestigationCase.id == case_id,
-        InvestigationCase.created_by == user.id
-    ).first()
-    
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
     if not c:
-        raise HTTPException(status_code=404, detail="Case not found or access denied")
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    if is_admin(user):
+        pass
+    elif is_investigator(user):
+        if c.assigned_expert != user.id:
+            raise HTTPException(status_code=403, detail="Forbidden: You cannot add notes to cases assigned to another investigator.")
+    else:
+        if c.created_by != user.id:
+            raise HTTPException(status_code=403, detail="Forbidden: Access denied to this case.")
+        if c.status not in [StatusEnum.DRAFT, StatusEnum.OPEN]:
+            raise HTTPException(status_code=403, detail="Case is submitted and locked. Notes cannot be added.")
         
     new_note = InvestigationNote(
         case_id=case_id,
@@ -490,6 +777,8 @@ def add_case_note(
     )
     db.add(new_note)
     db.commit()
+    
+    log_audit_event(db, c.id, user.id, "Investigation Notes Updated", f"Note added by {user.full_name}.")
     
     return {"message": "Note added successfully"}
 
@@ -500,16 +789,22 @@ def update_case_note(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    n = db.query(InvestigationNote).filter(
-        InvestigationNote.id == note_id,
-        InvestigationNote.user_id == user.id
-    ).first()
-    
+    n = db.query(InvestigationNote).filter(InvestigationNote.id == note_id).first()
     if not n:
-        raise HTTPException(status_code=404, detail="Note not found or edit denied")
+        raise HTTPException(status_code=404, detail="Note not found")
         
+    if not is_investigator_or_admin(user):
+        if n.user_id != user.id:
+            raise HTTPException(status_code=403, detail="Access denied")
+        if n.case and n.case.status not in [StatusEnum.DRAFT, StatusEnum.OPEN]:
+            raise HTTPException(status_code=403, detail="Case is submitted and locked. Notes cannot be modified.")
+            
     n.note = note
     db.commit()
+    
+    if n.case_id:
+        log_audit_event(db, n.case_id, user.id, "Investigation Notes Updated", f"Note updated by {user.full_name}.")
+        
     return {"message": "Note updated successfully"}
 
 @router.delete("/notes/{note_id}")
@@ -518,16 +813,23 @@ def delete_case_note(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    n = db.query(InvestigationNote).filter(
-        InvestigationNote.id == note_id,
-        InvestigationNote.user_id == user.id
-    ).first()
-    
+    n = db.query(InvestigationNote).filter(InvestigationNote.id == note_id).first()
     if not n:
-        raise HTTPException(status_code=404, detail="Note not found or deletion denied")
+        raise HTTPException(status_code=404, detail="Note not found")
         
+    if not is_investigator_or_admin(user):
+        if n.user_id != user.id:
+            raise HTTPException(status_code=403, detail="Access denied")
+        if n.case and n.case.status not in [StatusEnum.DRAFT, StatusEnum.OPEN]:
+            raise HTTPException(status_code=403, detail="Case is submitted and locked. Notes cannot be deleted.")
+            
+    case_id = n.case_id
     db.delete(n)
     db.commit()
+    
+    if case_id:
+        log_audit_event(db, case_id, user.id, "Investigation Notes Updated", f"Note deleted by {user.full_name}.")
+        
     return {"message": "Note deleted successfully"}
 
 # ─── 5. Upload Evidence Endpoint ───
@@ -538,32 +840,33 @@ async def upload_evidence(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    # Verify case ownership
-    c = db.query(InvestigationCase).filter(
-        InvestigationCase.id == case_id,
-        InvestigationCase.created_by == user.id
-    ).first()
-    
+    if is_investigator_or_admin(user):
+        c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    else:
+        c = db.query(InvestigationCase).filter(
+            InvestigationCase.id == case_id,
+            InvestigationCase.created_by == user.id
+        ).first()
+        
     if not c:
         raise HTTPException(status_code=404, detail="Case not found or access denied")
+        
+    if not is_investigator_or_admin(user) and c.status not in [StatusEnum.DRAFT, StatusEnum.OPEN]:
+        raise HTTPException(status_code=403, detail="Case is submitted and locked. Evidence cannot be uploaded.")
         
     original_name = file.filename
     content = await file.read()
     file_size = len(content)
     
-    # Calculate SHA256 Hash
     sha256 = hashlib.sha256(content).hexdigest()
     
-    # Generate unique stored filename
     ext = os.path.splitext(original_name)[1]
     stored_name = f"{uuid.uuid4().hex}{ext}"
     storage_path = os.path.join(UPLOAD_DIR, stored_name)
     
-    # Save the file to disk
     with open(storage_path, "wb") as f:
         f.write(content)
         
-    # Map file type
     mime = file.content_type or ""
     f_type = FileTypeEnum.DOCUMENT
     if mime.startswith("image/"):
@@ -589,7 +892,6 @@ async def upload_evidence(
     db.commit()
     db.refresh(new_evidence)
     
-    # Extract / Seed media metadata
     width, height, duration, fps, codec, sample_rate = None, None, None, None, None, None
     if f_type == FileTypeEnum.IMAGE:
         width = 1920
@@ -620,6 +922,7 @@ async def upload_evidence(
     db.add(metadata)
     db.commit()
     
+    log_audit_event(db, c.id, user.id, "Evidence Uploaded", f"Evidence file '{original_name}' uploaded.")
     add_user_notification(
         db, user.id, "Evidence Upload Completed",
         f"File '{original_name}' has been successfully uploaded to case {c.case_number}."
@@ -644,7 +947,10 @@ def get_user_evidence(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    query = db.query(EvidenceFile).filter(EvidenceFile.uploaded_by == user.id)
+    if is_investigator_or_admin(user):
+        query = db.query(EvidenceFile)
+    else:
+        query = db.query(EvidenceFile).filter(EvidenceFile.uploaded_by == user.id)
     
     if search:
         search_term = f"%{search}%"
@@ -689,25 +995,40 @@ def delete_evidence(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    e = db.query(EvidenceFile).filter(
-        EvidenceFile.id == evidence_id,
-        EvidenceFile.uploaded_by == user.id
-    ).first()
+    e = db.query(EvidenceFile).filter(EvidenceFile.id == evidence_id).first()
     
     if not e:
-        raise HTTPException(status_code=404, detail="Evidence not found or deletion denied")
+        raise HTTPException(status_code=404, detail="Evidence not found")
         
-    # Delete file from disk if exists
-    if os.path.exists(e.storage_path):
+    if not is_investigator_or_admin(user):
+        if e.uploaded_by != user.id:
+            raise HTTPException(status_code=403, detail="Access denied")
+        if e.case and e.case.status not in [StatusEnum.DRAFT, StatusEnum.OPEN]:
+            raise HTTPException(status_code=403, detail="Case is submitted and locked. Evidence cannot be deleted.")
+            
+    case_id = e.case_id
+    orig_name = e.original_name
+
+    if e.metadata_info:
+        db.delete(e.metadata_info)
+        
+    analyses = db.query(AIAnalysis).filter(AIAnalysis.evidence_id == e.id).all()
+    for a in analyses:
+        db.query(ForensicReview).filter(ForensicReview.analysis_id == a.id).delete()
+        db.delete(a)
+
+    if e.storage_path and os.path.exists(e.storage_path):
         try:
             os.remove(e.storage_path)
         except Exception as err:
             print("Failed to remove file from disk:", err)
             
-    orig_name = e.original_name
     db.delete(e)
     db.commit()
     
+    if case_id:
+        log_audit_event(db, case_id, user.id, "Evidence Deleted (before submission)", f"Evidence file '{orig_name}' was deleted.")
+        
     add_user_notification(
         db, user.id, "Evidence Deleted",
         f"Evidence file '{orig_name}' was deleted from storage."
@@ -741,11 +1062,13 @@ def run_ai_analysis(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    # Verify evidence ownership
-    e = db.query(EvidenceFile).filter(
-        EvidenceFile.id == evidence_id,
-        EvidenceFile.uploaded_by == user.id
-    ).first()
+    if is_investigator_or_admin(user):
+        e = db.query(EvidenceFile).filter(EvidenceFile.id == evidence_id).first()
+    else:
+        e = db.query(EvidenceFile).filter(
+            EvidenceFile.id == evidence_id,
+            EvidenceFile.uploaded_by == user.id
+        ).first()
     
     if not e:
         raise HTTPException(status_code=404, detail="Evidence file not found or access denied")
@@ -753,11 +1076,14 @@ def run_ai_analysis(
     model = db.query(AIModel).filter(AIModel.id == model_id, AIModel.status == True).first()
     if not model:
         raise HTTPException(status_code=404, detail="AI Model not found or inactive")
+
+    if e.case_id:
+        log_audit_event(db, e.case_id, user.id, "AI Scan Started", f"AI scan initiated on '{e.original_name}' using {model.model_name}.")
         
     # Perform simulated analysis
     import random
     choices = [AIResultEnum.REAL, AIResultEnum.DEEPFAKE, AIResultEnum.SUSPICIOUS]
-    weights = [0.4, 0.4, 0.2] # weights matching our probabilities
+    weights = [0.4, 0.4, 0.2]
     result = random.choices(choices, weights=weights)[0]
     
     confidence = round(random.uniform(0.85, 0.99), 4)
@@ -774,12 +1100,16 @@ def run_ai_analysis(
     
     db.add(analysis)
     
-    # Auto transition case status if it's currently OPEN
-    if e.case and e.case.status == StatusEnum.OPEN:
+    # Transition case status to UNDER_ANALYSIS if applicable
+    if e.case and e.case.status in [StatusEnum.CASE_OPENED, StatusEnum.OPEN, StatusEnum.CASE_FILED]:
         e.case.status = StatusEnum.UNDER_ANALYSIS
+        log_audit_event(db, e.case.id, user.id, "Status Changed to UNDER_ANALYSIS", f"Case status updated to UNDER_ANALYSIS following AI scan.")
         
     db.commit()
     db.refresh(analysis)
+
+    if e.case_id:
+        log_audit_event(db, e.case_id, user.id, "AI Scan Completed", f"AI scan completed on '{e.original_name}': Result {result.value} ({round(confidence * 100, 1)}%).")
     
     # Seed a simulated Forensic Review for deepfake or suspicious results (25% chance)
     if result in [AIResultEnum.DEEPFAKE, AIResultEnum.SUSPICIOUS] and random.random() < 0.5:
@@ -840,6 +1170,55 @@ def get_user_analyses(
             "analyzed_at": a.analyzed_at.isoformat() if a.analyzed_at else None
         })
     return analysis_list
+
+@router.post("/reviews")
+def add_forensic_review(
+    analysis_id: int = Form(...),
+    decision: str = Form(...),
+    observations: str = Form(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    if not is_investigator_or_admin(user):
+        raise HTTPException(status_code=403, detail="Only investigators can submit forensic reviews.")
+        
+    analysis = db.query(AIAnalysis).filter(AIAnalysis.id == analysis_id).first()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+        
+    try:
+        dec_enum = DecisionEnum[decision.upper()]
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid decision value")
+        
+    review = ForensicReview(
+        analysis_id=analysis_id,
+        reviewer_id=user.id,
+        decision=dec_enum,
+        observations=observations
+    )
+    db.add(review)
+    
+    case_id = analysis.evidence.case_id if analysis.evidence else None
+    if case_id:
+        c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+        if c and c.status in [StatusEnum.CASE_OPENED, StatusEnum.UNDER_ANALYSIS, StatusEnum.OPEN]:
+            c.status = StatusEnum.EXPERT_REVIEW
+            log_audit_event(db, case_id, user.id, "Status Changed to EXPERT_REVIEW", "Case status updated to EXPERT_REVIEW.")
+            
+        log_audit_event(db, case_id, user.id, "Expert Review Submitted", f"Expert review submitted with verdict '{dec_enum.value}' by {user.full_name}.")
+        
+    db.commit()
+    db.refresh(review)
+    
+    return {
+        "message": "Forensic review submitted successfully",
+        "review": {
+            "id": review.id,
+            "decision": review.decision.value,
+            "observations": review.observations
+        }
+    }
 
 # ─── 8. Reports Endpoints ───
 @router.get("/reports")
