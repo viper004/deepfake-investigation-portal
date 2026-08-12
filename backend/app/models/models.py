@@ -4,11 +4,6 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database.database import Base
 
-class PriorityEnum(enum.Enum):
-    LOW = "LOW"
-    MEDIUM = "MEDIUM"
-    HIGH = "HIGH"
-    CRITICAL = "CRITICAL"
 
 class StatusEnum(enum.Enum):
     DRAFT = "DRAFT"
