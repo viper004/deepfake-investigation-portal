@@ -439,6 +439,8 @@ export default function UserDashboard() {
       if (res.ok) {
         const data = await res.json();
         setStats({
+          availableCases: data.availableCases || 0,
+          assignedCases: data.assignedCases || 0,
           totalCases: data.totalCases,
           openCases: data.openCases,
           underAnalysis: data.underAnalysis,
@@ -2150,7 +2152,7 @@ export default function UserDashboard() {
 
                               {/* Download */}
                               <a
-                                href={`${BACKEND_URL}/uploads/${ev.file_name}`}
+                                href={`${BACKEND_URL}/api/v1/user/evidence/${ev.id}/download?token=${session?.accessToken}`}
                                 download={ev.original_name}
                                 className="p-1.5 border border-[#e5e5e5] rounded text-[#0a0a0a]/60 hover:bg-slate-100 flex items-center justify-center"
                                 title="Download"
@@ -2160,8 +2162,8 @@ export default function UserDashboard() {
                                 <Download className="h-3.5 w-3.5" />
                               </a>
 
-                              {/* Delete - Only before submission or for investigator */}
-                              {(isInvestigator || caseDetail.status === "DRAFT" || caseDetail.status === "OPEN") && (
+                              {/* Delete - Only before submission for user */}
+                              {(!isInvestigator && (caseDetail.status === "DRAFT" || caseDetail.status === "OPEN")) && (
                                 <button
                                   onClick={() => handleDeleteEvidence(ev.id)}
                                   className="p-1.5 border border-rose-200 rounded text-rose-600 hover:bg-rose-50"
@@ -2394,7 +2396,7 @@ export default function UserDashboard() {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
                   <h1 className="text-2xl font-bold tracking-tight">All Cases</h1>
-                  <p className="text-sm text-[#0a0a0a]/50">Every unassigned case available for digital investigators to claim.</p>
+                  <p className="text-sm text-[#0a0a0a]/50">View all cases in the system. You may only claim unassigned cases.</p>
                 </div>
               </div>
 
@@ -2427,9 +2429,9 @@ export default function UserDashboard() {
                 ) : openCases.length === 0 ? (
                   <div className="p-12 text-center space-y-3">
                     <ShieldAlert className="h-12 w-12 text-[#0a0a0a]/20 mx-auto" />
-                    <p className="text-base font-bold text-[#0a0a0a]/70">No unassigned open cases available</p>
+                    <p className="text-base font-bold text-[#0a0a0a]/70">No cases available</p>
                     <p className="text-xs text-[#0a0a0a]/40 max-w-sm mx-auto">
-                      All submitted citizen cases are currently assigned or in draft state.
+                      There are currently no cases available in the system.
                     </p>
                   </div>
                 ) : (
@@ -2666,7 +2668,7 @@ export default function UserDashboard() {
                                 <Eye className="h-3.5 w-3.5" />
                               </button>
                               <a
-                                href={`${BACKEND_URL}/uploads/${ev.file_name}`}
+                                href={`${BACKEND_URL}/api/v1/user/evidence/${ev.id}/download?token=${session?.accessToken}`}
                                 download={ev.original_name}
                                 className="p-1.5 border border-[#e5e5e5] rounded text-[#0a0a0a]/60 hover:bg-slate-100 flex items-center justify-center"
                                 target="_blank"
@@ -2674,12 +2676,14 @@ export default function UserDashboard() {
                               >
                                 <Download className="h-3.5 w-3.5" />
                               </a>
-                              <button
-                                onClick={() => handleDeleteEvidence(ev.id)}
-                                className="p-1.5 border border-rose-200 rounded text-rose-600 hover:bg-rose-50"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
+                              {!isInvestigator && (
+                                <button
+                                  onClick={() => handleDeleteEvidence(ev.id)}
+                                  className="p-1.5 border border-rose-200 rounded text-rose-600 hover:bg-rose-50"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              )}
                             </td>
                           </tr>
                         ))}
@@ -3471,19 +3475,19 @@ export default function UserDashboard() {
             <div className="flex-1 overflow-y-auto p-6 bg-slate-950 flex items-center justify-center min-h-[300px]">
               {(previewFile.file_type?.toUpperCase() === "IMAGE" || previewFile.mime_type?.startsWith("image/")) ? (
                 <img
-                  src={previewFile.file_name.startsWith("http") ? previewFile.file_name : `${BACKEND_URL}/uploads/${previewFile.file_name}`}
+                  src={previewFile.file_name.startsWith("http") ? previewFile.file_name : `${BACKEND_URL}/api/v1/user/evidence/${previewFile.id}/view?token=${session?.accessToken}`}
                   alt={previewFile.original_name}
                   className="max-h-[55vh] max-w-full object-contain rounded shadow-lg"
                 />
               ) : (previewFile.file_type?.toUpperCase() === "VIDEO" || previewFile.mime_type?.startsWith("video/")) ? (
                 <video
-                  src={previewFile.file_name.startsWith("http") ? previewFile.file_name : `${BACKEND_URL}/uploads/${previewFile.file_name}`}
+                  src={previewFile.file_name.startsWith("http") ? previewFile.file_name : `${BACKEND_URL}/api/v1/user/evidence/${previewFile.id}/view?token=${session?.accessToken}`}
                   controls
                   className="max-h-[55vh] max-w-full rounded shadow-lg"
                 />
               ) : (previewFile.file_type?.toUpperCase() === "AUDIO" || previewFile.mime_type?.startsWith("audio/")) ? (
                 <audio
-                  src={previewFile.file_name.startsWith("http") ? previewFile.file_name : `${BACKEND_URL}/uploads/${previewFile.file_name}`}
+                  src={previewFile.file_name.startsWith("http") ? previewFile.file_name : `${BACKEND_URL}/api/v1/user/evidence/${previewFile.id}/view?token=${session?.accessToken}`}
                   controls
                   className="w-full max-w-md"
                 />
@@ -3492,7 +3496,7 @@ export default function UserDashboard() {
                   <FileText className="h-16 w-16 text-[#CC2200] mx-auto" />
                   <p className="text-sm font-semibold">Document File Preview</p>
                   <a
-                    href={previewFile.file_name.startsWith("http") ? previewFile.file_name : `${BACKEND_URL}/uploads/${previewFile.file_name}`}
+                    href={previewFile.file_name.startsWith("http") ? previewFile.file_name : `${BACKEND_URL}/api/v1/user/evidence/${previewFile.id}/view?token=${session?.accessToken}`}
                     target="_blank"
                     rel="noreferrer"
                     className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#CC2200] rounded text-xs font-bold text-white hover:opacity-90"

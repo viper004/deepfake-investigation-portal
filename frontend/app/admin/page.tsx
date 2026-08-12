@@ -29,7 +29,10 @@ import {
   Send,
   CheckCircle,
   AlertCircle,
-  ChevronDown
+  ChevronDown,
+  Briefcase,
+  ArrowRight,
+  ArrowLeft
 } from "lucide-react";
 import Link from "next/link";
 import WorkspaceSwitcher from "@/components/WorkspaceSwitcher";
@@ -73,8 +76,8 @@ export default function AdminDashboard() {
   const session = sessionData as any;
   const router = useRouter();
 
-  // Sidebar Tab State (Overview vs User Management vs Investigators)
-  const [activeSidebarTab, setActiveSidebarTab] = useState<"Overview" | "User Management" | "Investigators" | "System Alerts" | "Audit Logs" | "Configuration">("Overview");
+  // Sidebar Tab State (Overview vs User Management vs Investigators vs Cases)
+  const [activeSidebarTab, setActiveSidebarTab] = useState<"Overview" | "User Management" | "Investigators" | "Cases" | "System Alerts" | "Audit Logs" | "Configuration">("Overview");
 
 
   // Investigators Management State
@@ -97,6 +100,20 @@ export default function AdminDashboard() {
   const [selectedLogs, setSelectedLogs] = useState<number[]>([]);
   const [isLogDrawerOpen, setIsLogDrawerOpen] = useState(false);
   const [selectedLog, setSelectedLog] = useState<any | null>(null);
+
+  // All Cases Management State
+  const [adminCases, setAdminCases] = useState<any[]>([]);
+  const [adminCasesTotal, setAdminCasesTotal] = useState(0);
+  const [adminCasesLoading, setAdminCasesLoading] = useState(false);
+  const [adminCasesLoaded, setAdminCasesLoaded] = useState(false);
+  const [adminCasesError, setAdminCasesError] = useState(false);
+  const [adminCasesPage, setAdminCasesPage] = useState(1);
+  const [adminCasesSearch, setAdminCasesSearch] = useState("");
+  const [adminCasesStatusFilter, setAdminCasesStatusFilter] = useState("All");
+
+  const [selectedAdminCaseId, setSelectedAdminCaseId] = useState<number | null>(null);
+  const [adminCaseDetail, setAdminCaseDetail] = useState<any | null>(null);
+  const [adminCaseDetailLoading, setAdminCaseDetailLoading] = useState(false);
   
   const handleSelectLog = (id: number) => {
     setSelectedLogs(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -430,6 +447,100 @@ export default function AdminDashboard() {
         fetchInvitations(true);
   }, [fetchStats, fetchUsers, fetchPendingUsers, fetchInvitations]);
 
+  const fetchAdminCases = useCallback(async (force = false) => {
+    if (!session?.accessToken) return;
+    if (adminCasesLoaded && !force) return;
+    try {
+      setAdminCasesLoading(true);
+      setAdminCasesError(false);
+      const queryParams = new URLSearchParams({
+        page: adminCasesPage.toString(),
+        limit: "20",
+      });
+      if (adminCasesSearch) queryParams.append("search", adminCasesSearch);
+      if (adminCasesStatusFilter && adminCasesStatusFilter !== "All") {
+        queryParams.append("status_filter", adminCasesStatusFilter);
+      }
+
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/cases?${queryParams.toString()}`, {
+        headers: { Authorization: `Bearer ${session.accessToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAdminCases(data.cases || []);
+        setAdminCasesTotal(data.total || 0);
+        setAdminCasesLoaded(true);
+        setAdminCasesError(false);
+      } else {
+        setAdminCasesError(true);
+        showToast("Unable to load cases. Please try again.", "error");
+      }
+    } catch (err) {
+      console.error("Error fetching admin cases:", err);
+      setAdminCasesError(true);
+      showToast("Unable to load cases. Please try again.", "error");
+    } finally {
+      setAdminCasesLoading(false);
+    }
+  }, [session?.accessToken, adminCasesPage, adminCasesSearch, adminCasesStatusFilter, adminCasesLoaded, showToast]);
+
+  const fetchAdminCaseDetail = useCallback(async (caseId: number) => {
+    if (!session?.accessToken) return;
+    try {
+      setAdminCaseDetailLoading(true);
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/cases/${caseId}`, {
+        headers: { Authorization: `Bearer ${session.accessToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAdminCaseDetail(data);
+      } else {
+        showToast("Error fetching case details.", "error");
+      }
+    } catch (err) {
+      showToast("Error fetching case details.", "error");
+    } finally {
+      setAdminCaseDetailLoading(false);
+    }
+  }, [session?.accessToken, showToast]);
+
+  const getCaseStatusBadge = (statusStr: string) => {
+    const s = (statusStr || "").toUpperCase();
+    if (s === "CASE_FILED" || s === "DRAFT" || s === "PENDING") {
+      return (
+        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200/50">
+          Pending
+        </span>
+      );
+    }
+    if (s === "CASE_OPENED" || s === "OPEN" || s === "ASSIGNED") {
+      return (
+        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200/50">
+          Assigned
+        </span>
+      );
+    }
+    if (s === "UNDER_ANALYSIS" || s === "EXPERT_REVIEW" || s === "REVIEW" || s === "UNDER INVESTIGATION") {
+      return (
+        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200/50">
+          Under Investigation
+        </span>
+      );
+    }
+    if (s === "CLOSED" || s === "COMPLETED") {
+      return (
+        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/50">
+          Completed
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200/50">
+        {statusStr}
+      </span>
+    );
+  };
+
   // Initial Fetches (Always load stats and active users initially)
   useEffect(() => {
     if (session?.accessToken) {
@@ -449,12 +560,21 @@ export default function AdminDashboard() {
         fetchPendingUsers();
       } else if (adminTab === "invitations" && !invitationsLoaded) {
         fetchInvitations();
-    fetchInvitationLogs();
+        fetchInvitationLogs();
       }
     } else if (activeSidebarTab === "Investigators" && !investigatorsLoaded) {
-            fetchInvestigators();
+      fetchInvestigators();
+    } else if (activeSidebarTab === "Cases" && !adminCasesLoaded) {
+      fetchAdminCases();
     }
-  }, [adminTab, activeSidebarTab, activeUsersLoaded, pendingUsersLoaded, invitationsLoaded, investigatorsLoaded, session?.accessToken, fetchUsers, fetchPendingUsers, fetchInvitations, fetchInvestigators]);
+  }, [adminTab, activeSidebarTab, activeUsersLoaded, pendingUsersLoaded, invitationsLoaded, investigatorsLoaded, adminCasesLoaded, session?.accessToken, fetchUsers, fetchPendingUsers, fetchInvitations, fetchInvestigators, fetchAdminCases]);
+
+  // Refetch cases when search or status filter parameters change
+  useEffect(() => {
+    if (session?.accessToken && activeSidebarTab === "Cases") {
+      fetchAdminCases(true);
+    }
+  }, [adminCasesSearch, adminCasesStatusFilter, adminCasesPage, session?.accessToken, activeSidebarTab]);
 
   // Refetch active users when active tab filters/pagination parameters change
   useEffect(() => {
@@ -882,6 +1002,7 @@ export default function AdminDashboard() {
                 { icon: <Activity className="h-5 w-5" />, label: "Overview" },
                 { icon: <Users className="h-5 w-5" />, label: "User Management" },
                 { icon: <UserCheck className="h-5 w-5" />, label: "Investigators" },
+                { icon: <Briefcase className="h-5 w-5" />, label: "Cases" },
                 { icon: <ShieldAlert className="h-5 w-5" />, label: "System Alerts" },
                 { icon: <FileText className="h-5 w-5" />, label: "Audit Logs" },
                 { icon: <Settings className="h-5 w-5" />, label: "Configuration" },
@@ -913,11 +1034,13 @@ export default function AdminDashboard() {
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div>
               <h1 className="text-2xl font-bold tracking-tight">
-                {activeSidebarTab === "Overview" ? "System Overview" : activeSidebarTab}
+                {activeSidebarTab === "Overview" ? "System Overview" : activeSidebarTab === "Cases" ? "All Cases" : activeSidebarTab}
               </h1>
               <p className="text-sm text-[#0a0a0a]/50">
                 {activeSidebarTab === "Overview" 
                   ? "Real-time portal activity and platform metrics."
+                  : activeSidebarTab === "Cases"
+                  ? "View and manage every investigation case in the system."
                   : activeSidebarTab === "User Management"
                   ? "Manage approved security personnel, roles, and registrations."
                   : activeSidebarTab === "Investigators"
@@ -1771,6 +1894,310 @@ export default function AdminDashboard() {
                 </div>
               )}
 
+            </div>
+          )}
+
+          {activeSidebarTab === "Cases" && (
+            <div className="space-y-6">
+              {selectedAdminCaseId && adminCaseDetail ? (
+                /* ──────────────── INDIVIDUAL CASE DETAILS VIEW ──────────────── */
+                <div className="space-y-6">
+                  {/* Top Bar / Navigation */}
+                  <div className="flex items-center justify-between pb-2 border-b border-[#e5e5e5]">
+                    <button
+                      onClick={() => {
+                        setSelectedAdminCaseId(null);
+                        setAdminCaseDetail(null);
+                      }}
+                      className="inline-flex items-center gap-2 text-sm font-semibold text-[#0a0a0a]/60 hover:text-[#CC2200] transition-colors"
+                    >
+                      <ArrowLeft className="h-4 w-4" />
+                      Back to All Cases
+                    </button>
+                    <div className="flex items-center gap-3">
+                      <span className="font-mono text-xs font-bold text-[#CC2200] bg-[#CC2200]/10 px-2.5 py-1 rounded">
+                        {adminCaseDetail.case_number}
+                      </span>
+                      {getCaseStatusBadge(adminCaseDetail.status)}
+                    </div>
+                  </div>
+
+                  {/* Main Header Information */}
+                  <div className="bg-white border border-[#e5e5e5] rounded-lg p-6 shadow-sm">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-[#f0f0f0] pb-5">
+                      <div>
+                        <div className="text-xs font-semibold text-[#0a0a0a]/40 uppercase tracking-wider mb-1">
+                          Case ID: {adminCaseDetail.case_number}
+                        </div>
+                        <h2 className="text-2xl font-bold text-[#0a0a0a]">
+                          {adminCaseDetail.title}
+                        </h2>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {getCaseStatusBadge(adminCaseDetail.status)}
+                      </div>
+                    </div>
+
+                    <div className="mt-5">
+                      <h3 className="text-xs font-bold uppercase text-[#0a0a0a]/40 mb-2 tracking-wider">
+                        Full Case Description
+                      </h3>
+                      <p className="text-sm text-[#0a0a0a]/80 leading-relaxed bg-[#fafafa] p-4 rounded-md border border-[#e5e5e5]/60">
+                        {adminCaseDetail.description || "No detailed description provided for this investigation case."}
+                      </p>
+                    </div>
+
+                    {/* Quick Specs Grid */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6 pt-5 border-t border-[#f0f0f0]">
+                      <div>
+                        <span className="block text-xs font-semibold text-[#0a0a0a]/40 uppercase tracking-wider mb-1">
+                          Case Filed Date
+                        </span>
+                        <span className="text-sm font-bold text-[#0a0a0a]">
+                          {formatDate(adminCaseDetail.submitted_at || adminCaseDetail.created_at)}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="block text-xs font-semibold text-[#0a0a0a]/40 uppercase tracking-wider mb-1">
+                          Assigned Investigator
+                        </span>
+                        <span className="text-sm font-bold text-[#0a0a0a]">
+                          {adminCaseDetail.assigned_expert_name || "Unassigned"}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="block text-xs font-semibold text-[#0a0a0a]/40 uppercase tracking-wider mb-1">
+                          Filed By
+                        </span>
+                        <span className="text-sm font-bold text-[#0a0a0a]">
+                          {adminCaseDetail.creator_name || "Anonymous Reporter"}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="block text-xs font-semibold text-[#0a0a0a]/40 uppercase tracking-wider mb-1">
+                          Evidence Count
+                        </span>
+                        <span className="text-sm font-bold text-[#0a0a0a]">
+                          {adminCaseDetail.evidence ? adminCaseDetail.evidence.length : 0} Files
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Evidence Files Section */}
+                  <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm">
+                    <div className="px-6 py-4 border-b border-[#e5e5e5] flex justify-between items-center bg-[#fafafa]/50">
+                      <h3 className="font-bold text-base text-[#0a0a0a]">
+                        Case Evidence ({adminCaseDetail.evidence ? adminCaseDetail.evidence.length : 0})
+                      </h3>
+                    </div>
+                    <div className="p-6">
+                      {!adminCaseDetail.evidence || adminCaseDetail.evidence.length === 0 ? (
+                        <p className="text-sm text-[#0a0a0a]/50 text-center py-6">
+                          No evidence files have been attached to this case.
+                        </p>
+                      ) : (
+                        <div className="space-y-3">
+                          {adminCaseDetail.evidence.map((file: any) => (
+                            <div key={file.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 bg-[#fafafa] border border-[#e5e5e5] rounded-lg gap-4">
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div className="w-10 h-10 rounded bg-[#CC2200]/10 text-[#CC2200] flex items-center justify-center flex-shrink-0 font-bold text-xs uppercase">
+                                  {file.file_type || "FILE"}
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="text-sm font-bold text-[#0a0a0a] truncate">{file.original_name || file.file_name}</div>
+                                  <div className="text-xs text-[#0a0a0a]/50 flex items-center gap-3 mt-0.5">
+                                    <span>SHA-256: {file.sha256_hash ? `${file.sha256_hash.substring(0, 16)}...` : "N/A"}</span>
+                                    <span>Uploaded: {formatDate(file.upload_time)}</span>
+                                  </div>
+                                </div>
+                              </div>
+                              <span className="text-xs font-medium px-2.5 py-1 bg-white border border-[#e5e5e5] rounded text-[#0a0a0a]/70">
+                                {file.file_size ? (file.file_size / (1024 * 1024)).toFixed(2) : "0.00"} MB
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Case Activity & History */}
+                  <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm">
+                    <div className="px-6 py-4 border-b border-[#e5e5e5] bg-[#fafafa]/50">
+                      <h3 className="font-bold text-base text-[#0a0a0a]">Case Activity & Audit History</h3>
+                    </div>
+                    <div className="p-6">
+                      {!adminCaseDetail.audit_logs || adminCaseDetail.audit_logs.length === 0 ? (
+                        <p className="text-sm text-[#0a0a0a]/50 text-center py-6">
+                          No activity records logged for this case yet.
+                        </p>
+                      ) : (
+                        <div className="relative border-l-2 border-[#e5e5e5] ml-3 space-y-6 pl-6">
+                          {adminCaseDetail.audit_logs.map((log: any) => (
+                            <div key={log.id} className="relative group">
+                              <div className="absolute -left-[31px] top-1 w-3 h-3 rounded-full bg-[#CC2200] border-2 border-white ring-2 ring-[#e5e5e5]" />
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-bold text-[#0a0a0a]">{log.action}</span>
+                                  <span className="text-xs text-[#0a0a0a]/40">• {formatActivityTime(log.timestamp)}</span>
+                                </div>
+                                <p className="text-xs text-[#0a0a0a]/60 mt-1">{log.description}</p>
+                                <div className="text-[11px] text-[#0a0a0a]/40 mt-1">Performed by: {log.user_name || "System"}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : adminCaseDetailLoading ? (
+                <div className="p-16 flex flex-col items-center justify-center bg-white border border-[#e5e5e5] rounded-lg shadow-sm">
+                  <Loader2 className="h-8 w-8 animate-spin text-[#CC2200] mb-3" />
+                  <p className="text-sm text-[#0a0a0a]/50 font-medium">Loading case details...</p>
+                </div>
+              ) : (
+                /* ──────────────── ALL CASES LIST VIEW ──────────────── */
+                <div className="space-y-6">
+                  {/* Search and Status Filter Bar */}
+                  <div className="bg-white border border-[#e5e5e5] rounded-lg p-4 shadow-sm flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+                    {/* Search Field */}
+                    <div className="relative flex-1">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#0a0a0a]/40" />
+                      <input
+                        type="text"
+                        placeholder="Search cases..."
+                        value={adminCasesSearch}
+                        onChange={(e) => {
+                          setAdminCasesSearch(e.target.value);
+                          setAdminCasesPage(1);
+                        }}
+                        className="pl-9 pr-4 py-2.5 bg-white border border-[#e5e5e5] rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#CC2200] focus:border-transparent w-full shadow-sm"
+                      />
+                    </div>
+
+                    {/* Status Filter */}
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="text-xs font-bold text-[#0a0a0a]/50 uppercase tracking-wider hidden sm:inline">Status:</span>
+                      <div className="flex items-center gap-1 bg-[#fafafa] border border-[#e5e5e5] p-1 rounded-md">
+                        {["All", "Pending", "Assigned", "Under Investigation", "Completed"].map((statusOption) => {
+                          const isActive = adminCasesStatusFilter === statusOption;
+                          return (
+                            <button
+                              key={statusOption}
+                              onClick={() => {
+                                setAdminCasesStatusFilter(statusOption);
+                                setAdminCasesPage(1);
+                              }}
+                              className={`px-3 py-1.5 rounded text-xs font-semibold transition-all ${
+                                isActive
+                                  ? "bg-[#CC2200] text-white shadow-sm"
+                                  : "text-[#0a0a0a]/60 hover:text-[#0a0a0a] hover:bg-white"
+                              }`}
+                            >
+                              {statusOption}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Horizontal Case Cards List */}
+                  {adminCasesLoading ? (
+                    <div className="space-y-4">
+                      {[1, 2, 3, 4].map((i) => (
+                        <div key={i} className="bg-white border border-[#e5e5e5] rounded-lg p-5 shadow-sm animate-pulse space-y-3">
+                          <div className="flex justify-between items-center">
+                            <div className="h-4 w-28 bg-slate-200 rounded" />
+                            <div className="h-5 w-24 bg-slate-200 rounded-full" />
+                          </div>
+                          <div className="h-6 w-3/4 bg-slate-200 rounded" />
+                          <div className="h-4 w-full bg-slate-200 rounded" />
+                          <div className="flex justify-between items-center pt-3 border-t border-[#f0f0f0]">
+                            <div className="h-4 w-40 bg-slate-200 rounded" />
+                            <div className="h-8 w-24 bg-slate-200 rounded" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : adminCasesError ? (
+                    <div className="bg-white border border-[#e5e5e5] rounded-lg p-12 text-center text-[#0a0a0a]/50 shadow-sm">
+                      <AlertCircle className="h-12 w-12 mx-auto mb-3 text-amber-500" />
+                      <h3 className="text-base font-bold text-[#0a0a0a]/80">Unable to load cases. Please try again.</h3>
+                      <p className="text-xs text-[#0a0a0a]/50 mt-1 mb-4">An error occurred while fetching investigation cases from the server.</p>
+                      <button
+                        onClick={() => fetchAdminCases(true)}
+                        className="px-4 py-2 bg-[#CC2200] text-white rounded text-xs font-bold hover:bg-[#b31e00] transition-colors shadow-sm"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : adminCases.length === 0 ? (
+                    <div className="bg-white border border-[#e5e5e5] rounded-lg p-12 text-center text-[#0a0a0a]/50 shadow-sm">
+                      <Briefcase className="h-12 w-12 mx-auto mb-3 text-[#0a0a0a]/30" />
+                      <h3 className="text-base font-bold text-[#0a0a0a]/80">No investigation cases found</h3>
+                      <p className="text-xs text-[#0a0a0a]/50 mt-1">
+                        {adminCasesSearch || adminCasesStatusFilter !== "All"
+                          ? "Try adjusting your search criteria or status filter."
+                          : "No cases have been submitted to the platform yet."}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {adminCases.map((c) => (
+                        <div
+                          key={c.id}
+                          className="bg-white border border-[#e5e5e5] rounded-lg p-5 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between group"
+                        >
+                          <div>
+                            {/* Card Top Row: Case ID & Status Badge */}
+                            <div className="flex items-center justify-between gap-3 mb-2">
+                              <span className="font-mono text-xs font-bold text-[#CC2200] bg-[#CC2200]/10 px-2.5 py-0.5 rounded tracking-wider">
+                                {c.case_number}
+                              </span>
+                              {getCaseStatusBadge(c.status)}
+                            </div>
+
+                            {/* Case Title */}
+                            <h3 className="text-lg font-bold text-[#0a0a0a] group-hover:text-[#CC2200] transition-colors line-clamp-1">
+                              {c.title}
+                            </h3>
+
+                            {/* Short Case Description */}
+                            <p className="text-sm text-[#0a0a0a]/60 mt-1 line-clamp-2 leading-relaxed">
+                              {c.description || "No description provided."}
+                            </p>
+                          </div>
+
+                          {/* Card Footer Metadata & View Case Button */}
+                          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-4 mt-4 border-t border-[#f0f0f0] text-xs text-[#0a0a0a]/60">
+                            <div className="flex flex-wrap items-center gap-4">
+                              <span>
+                                <strong className="font-semibold text-[#0a0a0a]/80">Filed:</strong> {formatDate(c.submitted_at || c.created_at)}
+                              </span>
+                              <span>
+                                <strong className="font-semibold text-[#0a0a0a]/80">Investigator:</strong> {c.assigned_expert_name || "Unassigned"}
+                              </span>
+                            </div>
+
+                            <button
+                              onClick={() => {
+                                setSelectedAdminCaseId(c.id);
+                                fetchAdminCaseDetail(c.id);
+                              }}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-bold bg-[#CC2200] text-white hover:bg-[#b31e00] transition-all shadow-sm flex-shrink-0"
+                            >
+                              View Case <ArrowRight className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

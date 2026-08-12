@@ -261,16 +261,127 @@ def seed_ai_models():
     finally:
         db.close()
 
+def seed_investigation_cases():
+    db = SessionLocal()
+    try:
+        from app.models.models import InvestigationCase, EvidenceFile, FileTypeEnum, StatusEnum, InvestigationNote, AuditLog
+        from app.models.user import User
+        from datetime import datetime, timezone, timedelta
+        
+        if db.query(InvestigationCase).count() == 0:
+            creator = db.query(User).filter(User.role_id == 3).first()
+            creator_id = creator.id if creator else 1
+            
+            investigator = db.query(User).filter(User.role_id == 2).first()
+            investigator_id = investigator.id if investigator else 1
+            
+            now = datetime.now(timezone.utc)
+            
+            cases_data = [
+                {
+                    "case_number": "CASE-2026-0048",
+                    "title": "Deepfake Investigation – Video Evidence",
+                    "description": "AI-generated video submitted as potential digital evidence for forensic analysis and verification.",
+                    "created_by": creator_id,
+                    "assigned_expert": investigator_id,
+                    "status": StatusEnum.UNDER_ANALYSIS,
+                    "incident_date": now - timedelta(days=2),
+                    "submitted_at": now - timedelta(days=2),
+                    "opened_at": now - timedelta(days=1),
+                },
+                {
+                    "case_number": "CASE-2026-0039",
+                    "title": "Synthetic Audio Impersonation – Executive Call",
+                    "description": "Cloned voice recording claiming to be corporate executive authorizing unauthorized wire transfers.",
+                    "created_by": creator_id,
+                    "assigned_expert": investigator_id,
+                    "status": StatusEnum.EXPERT_REVIEW,
+                    "incident_date": now - timedelta(days=5),
+                    "submitted_at": now - timedelta(days=4),
+                    "opened_at": now - timedelta(days=3),
+                },
+                {
+                    "case_number": "CASE-2026-0025",
+                    "title": "Manipulated Identity Document Scan",
+                    "description": "High-resolution digital passport scan submitted for verification containing neural network facial tampering.",
+                    "created_by": creator_id,
+                    "assigned_expert": None,
+                    "status": StatusEnum.CASE_FILED,
+                    "incident_date": now - timedelta(days=3),
+                    "submitted_at": now - timedelta(days=3),
+                    "opened_at": None,
+                },
+                {
+                    "case_number": "CASE-2026-0012",
+                    "title": "Election Broadcast Tampering Analysis",
+                    "description": "Altered video clip of political speech circulated on social media platforms.",
+                    "created_by": creator_id,
+                    "assigned_expert": investigator_id,
+                    "status": StatusEnum.CLOSED,
+                    "incident_date": now - timedelta(days=10),
+                    "submitted_at": now - timedelta(days=10),
+                    "opened_at": now - timedelta(days=9),
+                },
+                {
+                    "case_number": "CASE-2026-0051",
+                    "title": "Biometric Verification Fraud Check",
+                    "description": "Facial recognition spoof attempt detected at automated border control terminal.",
+                    "created_by": creator_id,
+                    "assigned_expert": investigator_id,
+                    "status": StatusEnum.CASE_OPENED,
+                    "incident_date": now - timedelta(days=1),
+                    "submitted_at": now - timedelta(days=1),
+                    "opened_at": now - timedelta(hours=5),
+                }
+            ]
+            
+            for c_data in cases_data:
+                c = InvestigationCase(**c_data)
+                db.add(c)
+                db.flush()
+                
+                # Add sample evidence file
+                ef = EvidenceFile(
+                    case_id=c.id,
+                    uploaded_by=creator_id,
+                    file_name=f"evidence_{c.case_number.lower()}.mp4",
+                    original_name=f"Digital_Evidence_{c.case_number}.mp4",
+                    file_type=FileTypeEnum.VIDEO,
+                    mime_type="video/mp4",
+                    file_size=15482000,
+                    storage_path=f"uploads/evidence_{c.case_number.lower()}.mp4",
+                    sha256_hash="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                )
+                db.add(ef)
+                
+                # Add sample audit log
+                log = AuditLog(
+                    case_id=c.id,
+                    user_id=creator_id,
+                    action="Case Filed",
+                    description=f"Initial case {c.case_number} created and submitted for forensic review."
+                )
+                db.add(log)
+                
+            db.commit()
+    except Exception as e:
+        print("Database case seeding error:", e)
+        db.rollback()
+    finally:
+        db.close()
+
 # Run database configuration updates and seed initial roles/users/models
 init_db_updates()
 seed_roles_and_users()
 seed_ai_models()
+seed_investigation_cases()
 
 app = FastAPI(title="Sentinel AI API")
 
-# Mount StaticFiles directory for uploads (evidence, profile pictures, documents)
+# Disabled public StaticFiles directory for uploads to secure evidence files.
+# Evidence files are now served via authenticated /api/v1/user/evidence/{id}/download endpoints.
 os.makedirs("uploads", exist_ok=True)
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+# app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # Configure CORS so frontend can call backend
 app.add_middleware(
