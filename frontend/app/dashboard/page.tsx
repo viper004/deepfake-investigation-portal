@@ -231,6 +231,13 @@ export default function UserDashboard() {
     (session?.user as any)?.role_id === 1 || 
     (session?.user as any)?.role_id === 2 || 
     (Array.isArray(session?.user?.roles) && (session.user.roles.includes(1) || session.user.roles.includes(2)));
+
+  const isAdmin = 
+    session?.user?.role === "ADMIN" || 
+    session?.user?.role === 1 || 
+    (session?.user as any)?.role_id === 1 || 
+    (Array.isArray(session?.user?.roles) && session.user.roles.includes(1)) ||
+    session?.user?.email === "superuser@example.com";
   const [isSubmitConfirmModalOpen, setIsSubmitConfirmModalOpen] = useState(false);
   const [isOpenConfirmModalOpen, setIsOpenConfirmModalOpen] = useState(false);
   const [isClaimConfirmModalOpen, setIsClaimConfirmModalOpen] = useState(false);
@@ -2086,7 +2093,25 @@ export default function UserDashboard() {
                 <div className="lg:col-span-2 space-y-6">
                   
                   {/* Evidence Table */}
-                  <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm overflow-hidden">
+                  {(() => {
+                    const isAssignedInvestigator = isInvestigator && caseDetail.assigned_expert_id === Number(session?.user?.id);
+                    const hasEvidenceAccess = isAdmin || isAssignedInvestigator || !isInvestigator;
+                    
+                    if (!hasEvidenceAccess) {
+                      return (
+                        <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm overflow-hidden p-8 text-center space-y-3">
+                          <Lock className="h-10 w-10 text-[#0a0a0a]/30 mx-auto" />
+                          <h3 className="font-bold text-[#0a0a0a]">Evidence Restricted</h3>
+                          <p className="text-sm text-[#0a0a0a]/60 max-w-sm mx-auto">
+                            Evidence files are only accessible to the investigator assigned to this case.
+                          </p>
+                        </div>
+                      );
+                    }
+                    
+                    return (
+                      <>
+                        <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm overflow-hidden">
                     <div className="px-5 py-4 border-b border-[#e5e5e5] flex justify-between items-center bg-slate-50/50">
                       <h3 className="font-bold text-sm">Uploaded Evidence</h3>
                       {(isInvestigator || caseDetail.status === "DRAFT" || caseDetail.status === "OPEN") && (
@@ -2246,6 +2271,9 @@ export default function UserDashboard() {
                       )}
                     </div>
                   )}
+                  </>
+                  );
+                  })()}
 
                   {/* Forensic Expert Reviews - Investigator Only */}
                   {isInvestigator && (
@@ -2444,7 +2472,6 @@ export default function UserDashboard() {
                           <th className="py-3.5 px-4">REPORTED BY</th>
                           <th className="py-3.5 px-4">INCIDENT DATE</th>
                           <th className="py-3.5 px-4">SUBMITTED DATE</th>
-                          <th className="py-3.5 px-4">PRIORITY</th>
                           <th className="py-3.5 px-4 text-center">ACTION</th>
                         </tr>
                       </thead>
@@ -2459,11 +2486,6 @@ export default function UserDashboard() {
                             </td>
                             <td className="py-3.5 px-4 text-[#0a0a0a]/60">
                               {c.submitted_at ? new Date(c.submitted_at).toLocaleDateString("en-GB") : (c.created_at ? new Date(c.created_at).toLocaleDateString("en-GB") : "N/A")}
-                            </td>
-                            <td className="py-3.5 px-4">
-                              <span className="px-2.5 py-1 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                                {c.priority || "MEDIUM"}
-                              </span>
                             </td>
                             <td className="py-3.5 px-4 text-center">
                               <button

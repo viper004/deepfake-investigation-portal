@@ -372,7 +372,6 @@ def get_cases(
             "title": c.title,
             "description": c.description,
             "status": c.status.value,
-            "priority": "MEDIUM",
             "ai_progress": ai_prog,
             "incident_date": c.incident_date.isoformat() if c.incident_date else None,
             "created_at": c.created_at.isoformat() if c.created_at else None,
@@ -436,7 +435,6 @@ def get_open_cases(
             "title": c.title,
             "description": c.description,
             "status": c.status.value,
-            "priority": "MEDIUM",
             "incident_date": c.incident_date.isoformat() if c.incident_date else None,
             "created_at": c.created_at.isoformat() if c.created_at else None,
             "submitted_at": c.submitted_at.isoformat() if c.submitted_at else (c.created_at.isoformat() if c.created_at else None),
@@ -554,13 +552,19 @@ def open_case(
         raise HTTPException(status_code=404, detail="Case not found")
         
     # Prevent multi-investigator race conditions
-    if c.assigned_expert is not None or c.status != StatusEnum.CASE_FILED:
+    if c.assigned_expert is not None:
         raise HTTPException(
             status_code=409,
             detail="This case has already been assigned to another investigator."
         )
         
-    # Enforce Investigator Limit: Max 2 simultaneous active investigations
+    if c.status != StatusEnum.CASE_FILED:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This case cannot be investigated because its status is {c.status.value}. It must be submitted first."
+        )
+        
+    # Enforce Investigator Limit: Max 3 simultaneous active investigations
     active_cases_count = db.query(InvestigationCase).filter(
         InvestigationCase.assigned_expert == user.id,
         InvestigationCase.status.in_([
@@ -572,10 +576,10 @@ def open_case(
         ])
     ).count()
     
-    if active_cases_count >= 2:
+    if active_cases_count >= 3:
         raise HTTPException(
             status_code=400,
-            detail="LIMIT_REACHED: Maximum active investigations reached. You already have 2 active investigation cases assigned."
+            detail="LIMIT_REACHED: Maximum active investigations reached. You already have 3 active investigation cases assigned."
         )
         
     c.status = StatusEnum.CASE_OPENED
@@ -617,44 +621,50 @@ def get_case_detail(
         
     # Get Evidence
     evidence_list = []
-    for e in c.evidence_files:
-        meta_info = None
-        if e.metadata_info:
-            meta_info = {
-                "width": e.metadata_info.width,
-                "height": e.metadata_info.height,
-                "duration": e.metadata_info.duration,
-                "fps": e.metadata_info.fps,
-                "codec": e.metadata_info.codec,
-                "sample_rate": e.metadata_info.sample_rate,
-                "gps_location": e.metadata_info.gps_location,
-                "creation_date": e.metadata_info.creation_date.isoformat() if e.metadata_info.creation_date else None
-            }
-            
-        analyses_list = []
-        for a in e.analyses:
-            analyses_list.append({
-                "id": a.id,
-                "model_name": a.model.model_name if a.model else "AI Model",
-                "version": a.model.version if a.model else "1.0",
-                "result": a.result.value,
-                "confidence_score": a.confidence_score,
-                "processing_time": a.processing_time,
-                "analyzed_at": a.analyzed_at.isoformat() if a.analyzed_at else None
+    
+    has_evidence_access = True
+    if is_investigator(user) and not is_admin(user) and c.assigned_expert != user.id:
+        has_evidence_access = False
+        
+    if has_evidence_access:
+        for e in c.evidence_files:
+            meta_info = None
+            if e.metadata_info:
+                meta_info = {
+                    "width": e.metadata_info.width,
+                    "height": e.metadata_info.height,
+                    "duration": e.metadata_info.duration,
+                    "fps": e.metadata_info.fps,
+                    "codec": e.metadata_info.codec,
+                    "sample_rate": e.metadata_info.sample_rate,
+                    "gps_location": e.metadata_info.gps_location,
+                    "creation_date": e.metadata_info.creation_date.isoformat() if e.metadata_info.creation_date else None
+                }
+                
+            analyses_list = []
+            for a in e.analyses:
+                analyses_list.append({
+                    "id": a.id,
+                    "model_name": a.model.model_name if a.model else "AI Model",
+                    "version": a.model.version if a.model else "1.0",
+                    "result": a.result.value,
+                    "confidence_score": a.confidence_score,
+                    "processing_time": a.processing_time,
+                    "analyzed_at": a.analyzed_at.isoformat() if a.analyzed_at else None
+                })
+                
+            evidence_list.append({
+                "id": e.id,
+                "file_name": e.file_name,
+                "original_name": e.original_name,
+                "file_type": e.file_type.value,
+                "mime_type": e.mime_type,
+                "file_size": e.file_size,
+                "sha256_hash": e.sha256_hash,
+                "upload_time": e.upload_time.isoformat() if e.upload_time else None,
+                "metadata": meta_info,
+                "analyses": analyses_list
             })
-            
-        evidence_list.append({
-            "id": e.id,
-            "file_name": e.file_name,
-            "original_name": e.original_name,
-            "file_type": e.file_type.value,
-            "mime_type": e.mime_type,
-            "file_size": e.file_size,
-            "sha256_hash": e.sha256_hash,
-            "upload_time": e.upload_time.isoformat() if e.upload_time else None,
-            "metadata": meta_info,
-            "analyses": analyses_list
-        })
         
     # Get Forensic Reviews linked to case's evidence analysis
     reviews_list = []
