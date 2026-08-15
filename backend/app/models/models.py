@@ -8,10 +8,13 @@ from app.database.database import Base
 class StatusEnum(enum.Enum):
     DRAFT = "DRAFT"
     CASE_FILED = "CASE_FILED"
+    CASE_UNDER_INVESTIGATION = "CASE_UNDER_INVESTIGATION"
+    CLOSED = "CLOSED"
+
+    # Legacy/compatibility values
     CASE_OPENED = "CASE_OPENED"
     UNDER_ANALYSIS = "UNDER_ANALYSIS"
     EXPERT_REVIEW = "EXPERT_REVIEW"
-    CLOSED = "CLOSED"
     OPEN = "OPEN"
     REVIEW = "REVIEW"
 
@@ -216,4 +219,37 @@ class CaseMessage(Base):
 
     case = relationship("InvestigationCase", back_populates="messages")
     sender = relationship("User")
+
+
+class ForensicScan(Base):
+    __tablename__ = "forensic_scans"
+    id = Column(Integer, primary_key=True, index=True)
+    case_id = Column(Integer, ForeignKey("investigation_cases.id"), nullable=False)
+    scanned_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    scan_status = Column(String(50), default="COMPLETED")
+    scan_duration = Column(Float, default=10.2)
+    evidence_count = Column(Integer, default=0)
+    results_json = Column(Text, nullable=False)
+    pdf_path = Column(String(500), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    case = relationship("InvestigationCase")
+    scanner = relationship("User")
+
+
+class InvestigatorNote(Base):
+    __tablename__ = "investigator_notes"
+    id = Column(Integer, primary_key=True, index=True)
+    case_id = Column(Integer, ForeignKey("investigation_cases.id", ondelete="CASCADE"), nullable=False)
+    investigator_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    content = Column(Text, nullable=False)
+    content_json = Column(JSON, nullable=True)
+    related_evidence_ids = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    case = relationship("InvestigationCase")
+    investigator = relationship("User", foreign_keys=[investigator_id])
+
+
 

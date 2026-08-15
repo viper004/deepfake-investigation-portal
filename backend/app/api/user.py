@@ -12,12 +12,15 @@ from fastapi.responses import FileResponse
 
 from pydantic import BaseModel
 
+import json
 from app.database.database import SessionLocal
 from app.models.models import (
     InvestigationCase, EvidenceFile, MediaMetadata, AIModel, AIAnalysis,
-    ForensicReview, InvestigationNote, Report, Notification, AuditLog, CaseMessage,
-    StatusEnum, FileTypeEnum, AIResultEnum, ReportTypeEnum, MediaTypeEnum
+    ForensicReview, InvestigationNote, InvestigatorNote, Report, Notification, AuditLog, CaseMessage,
+    ForensicScan, StatusEnum, FileTypeEnum, AIResultEnum, ReportTypeEnum, MediaTypeEnum
 )
+from app.schemas.user import InvestigatorNoteCreate, InvestigatorNoteUpdate, InvestigatorNoteResponse
+from app.services.forensic_report import MockForensicScanner, generate_forensic_pdf_report
 from app.models.user import User
 from app.utils.auth import SECRET_KEY, ALGORITHM, get_password_hash
 
@@ -131,9 +134,11 @@ def get_user_stats(
         ).count()
         total_cases = db.query(InvestigationCase).count()
         open_cases = db.query(InvestigationCase).filter(
-            InvestigationCase.status.in_([StatusEnum.CASE_FILED, StatusEnum.CASE_OPENED, StatusEnum.OPEN])
+            InvestigationCase.status.in_([StatusEnum.CASE_FILED, StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.CASE_OPENED, StatusEnum.OPEN])
         ).count()
-        under_analysis = db.query(InvestigationCase).filter(InvestigationCase.status == StatusEnum.UNDER_ANALYSIS).count()
+        under_analysis = db.query(InvestigationCase).filter(
+            InvestigationCase.status.in_([StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.UNDER_ANALYSIS])
+        ).count()
         closed_cases = db.query(InvestigationCase).filter(InvestigationCase.status == StatusEnum.CLOSED).count()
         evidence_uploaded = db.query(EvidenceFile).count()
         ai_completed = db.query(AIAnalysis).count()
@@ -147,6 +152,7 @@ def get_user_stats(
         assigned_cases = db.query(InvestigationCase).filter(
             InvestigationCase.assigned_expert == user.id,
             InvestigationCase.status.in_([
+                StatusEnum.CASE_UNDER_INVESTIGATION,
                 StatusEnum.CASE_OPENED,
                 StatusEnum.UNDER_ANALYSIS,
                 StatusEnum.EXPERT_REVIEW,
@@ -158,7 +164,7 @@ def get_user_stats(
         open_cases = assigned_cases
         under_analysis = db.query(InvestigationCase).filter(
             InvestigationCase.assigned_expert == user.id,
-            InvestigationCase.status == StatusEnum.UNDER_ANALYSIS
+            InvestigationCase.status.in_([StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.UNDER_ANALYSIS])
         ).count()
         closed_cases = db.query(InvestigationCase).filter(
             InvestigationCase.assigned_expert == user.id,
@@ -177,11 +183,11 @@ def get_user_stats(
         total_cases = db.query(InvestigationCase).filter(InvestigationCase.created_by == user.id).count()
         open_cases = db.query(InvestigationCase).filter(
             InvestigationCase.created_by == user.id,
-            InvestigationCase.status.in_([StatusEnum.CASE_FILED, StatusEnum.CASE_OPENED, StatusEnum.OPEN])
+            InvestigationCase.status.in_([StatusEnum.CASE_FILED, StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.CASE_OPENED, StatusEnum.OPEN])
         ).count()
         under_analysis = db.query(InvestigationCase).filter(
             InvestigationCase.created_by == user.id,
-            InvestigationCase.status == StatusEnum.UNDER_ANALYSIS
+            InvestigationCase.status.in_([StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.UNDER_ANALYSIS])
         ).count()
         closed_cases = db.query(InvestigationCase).filter(
             InvestigationCase.created_by == user.id,
@@ -319,11 +325,14 @@ def get_cases(
     if scope == "open_cases":
         if not is_investigator_or_admin(user):
             raise HTTPException(status_code=403, detail="Access denied: Only investigators can view all cases.")
-        query = db.query(InvestigationCase)
+        query = db.query(InvestigationCase).filter(InvestigationCase.status == StatusEnum.CASE_FILED)
     elif is_admin(user):
         query = db.query(InvestigationCase)
     elif is_investigator(user):
-        query = db.query(InvestigationCase).filter(InvestigationCase.assigned_expert == user.id)
+        query = db.query(InvestigationCase).filter(
+            InvestigationCase.assigned_expert == user.id,
+            InvestigationCase.status.in_([StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.CASE_OPENED, StatusEnum.OPEN])
+        )
     else:
         query = db.query(InvestigationCase).filter(InvestigationCase.created_by == user.id)
     
@@ -343,9 +352,9 @@ def get_cases(
         if sf == "PENDING":
             query = query.filter(InvestigationCase.status.in_([StatusEnum.CASE_FILED, StatusEnum.DRAFT]))
         elif sf == "ASSIGNED":
-            query = query.filter(InvestigationCase.status.in_([StatusEnum.CASE_OPENED, StatusEnum.OPEN]))
+            query = query.filter(InvestigationCase.status.in_([StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.CASE_OPENED, StatusEnum.OPEN]))
         elif sf in ["UNDER INVESTIGATION", "UNDER_INVESTIGATION"]:
-            query = query.filter(InvestigationCase.status.in_([StatusEnum.UNDER_ANALYSIS, StatusEnum.EXPERT_REVIEW, StatusEnum.REVIEW]))
+            query = query.filter(InvestigationCase.status.in_([StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.UNDER_ANALYSIS, StatusEnum.EXPERT_REVIEW, StatusEnum.REVIEW]))
         elif sf == "COMPLETED":
             query = query.filter(InvestigationCase.status == StatusEnum.CLOSED)
         else:
@@ -408,15 +417,16 @@ def get_open_cases(
     if not is_investigator_or_admin(user):
         raise HTTPException(status_code=403, detail="Access denied: Only investigators can view all cases.")
         
-    query = db.query(InvestigationCase)
+    query = db.query(InvestigationCase).filter(InvestigationCase.status == StatusEnum.CASE_FILED)
     
     if search:
         search_term = f"%{search}%"
-        query = query.filter(
+        query = query.outerjoin(User, InvestigationCase.created_by == User.id).filter(
             or_(
                 InvestigationCase.case_number.like(search_term),
                 InvestigationCase.title.like(search_term),
-                InvestigationCase.description.like(search_term)
+                InvestigationCase.description.like(search_term),
+                User.full_name.like(search_term)
             )
         )
         
@@ -527,14 +537,14 @@ def submit_case(
     if not c:
         raise HTTPException(status_code=404, detail="Case not found or access denied")
         
-    if c.status not in [StatusEnum.DRAFT, StatusEnum.OPEN]:
-        raise HTTPException(status_code=400, detail="Case has already been submitted for review.")
+    if c.status != StatusEnum.DRAFT:
+        raise HTTPException(status_code=400, detail="Case must be in DRAFT status to submit.")
         
     if len(c.evidence_files) == 0:
         raise HTTPException(status_code=400, detail="At least one evidence file must be uploaded before submission.")
         
     if len(c.notes) == 0:
-        raise HTTPException(status_code=400, detail="Investigation notes cannot be empty before submission.")
+        raise HTTPException(status_code=400, detail="Case notes cannot be empty before submission.")
         
     c.status = StatusEnum.CASE_FILED
     c.submitted_at = datetime.now(timezone.utc)
@@ -597,7 +607,7 @@ def open_case(
             detail="LIMIT_REACHED: Maximum active investigations reached. You already have 3 active investigation cases assigned."
         )
         
-    c.status = StatusEnum.CASE_OPENED
+    c.status = StatusEnum.CASE_UNDER_INVESTIGATION
     c.opened_at = datetime.now(timezone.utc)
     c.assigned_expert = user.id
     db.commit()
@@ -662,11 +672,15 @@ def get_case_detail(
     if not c:
         raise HTTPException(status_code=404, detail="Case not found")
         
-    # Strictly enforce case access permission based on user role
+    # Strictly enforce case access permission based on user role and assignment
     if is_admin(user):
         pass
     elif is_investigator(user):
-        pass # All investigators can view case details (evidence is restricted below/frontend)
+        if c.assigned_expert != user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="You are not assigned to this case. Claim the case first to access the workspace."
+            )
     else:
         if c.created_by != user.id:
             raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this case.")
@@ -807,6 +821,20 @@ def update_case(
     elif is_investigator(user):
         if c.assigned_expert != user.id:
             raise HTTPException(status_code=403, detail="Forbidden: You cannot modify investigations assigned to another investigator.")
+        if title != c.title or description != c.description:
+            raise HTTPException(status_code=403, detail="Forbidden: Investigators are not allowed to modify case details.")
+        if incident_date and incident_date.strip():
+            try:
+                date_part = incident_date.strip().split("T")[0]
+                inc_date_obj = datetime.strptime(date_part, "%Y-%m-%d").date()
+                if not c.incident_date or inc_date_obj != c.incident_date.date():
+                    raise HTTPException(status_code=403, detail="Forbidden: Investigators are not allowed to modify case details.")
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+        elif c.incident_date is not None:
+            raise HTTPException(status_code=403, detail="Forbidden: Investigators are not allowed to modify case details.")
     else:
         if c.created_by != user.id:
             raise HTTPException(status_code=403, detail="Forbidden: Access denied to this case.")
@@ -817,10 +845,42 @@ def update_case(
     c.description = description
     
     old_status = c.status
-    try:
-        c.status = StatusEnum[status.upper()]
-    except:
-        pass
+    if status and status.strip():
+        try:
+            new_status = StatusEnum[status.upper().strip()]
+            if old_status != new_status:
+                valid_transitions = {
+                    StatusEnum.DRAFT: [StatusEnum.CASE_FILED],
+                    StatusEnum.CASE_FILED: [StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.DRAFT],
+                    StatusEnum.CASE_UNDER_INVESTIGATION: [StatusEnum.CLOSED, StatusEnum.CASE_FILED],
+                    StatusEnum.CLOSED: [StatusEnum.CASE_UNDER_INVESTIGATION]
+                }
+                allowed = valid_transitions.get(old_status, [])
+                if new_status not in allowed:
+                    mapped_old = old_status
+                    if old_status in [StatusEnum.CASE_OPENED, StatusEnum.UNDER_ANALYSIS, StatusEnum.EXPERT_REVIEW, StatusEnum.REVIEW]:
+                        mapped_old = StatusEnum.CASE_UNDER_INVESTIGATION
+                    elif old_status == StatusEnum.OPEN:
+                        mapped_old = StatusEnum.CASE_FILED
+                        
+                    mapped_new = new_status
+                    if new_status in [StatusEnum.CASE_OPENED, StatusEnum.UNDER_ANALYSIS, StatusEnum.EXPERT_REVIEW, StatusEnum.REVIEW]:
+                        mapped_new = StatusEnum.CASE_UNDER_INVESTIGATION
+                    elif new_status == StatusEnum.OPEN:
+                        mapped_new = StatusEnum.CASE_FILED
+                        
+                    if mapped_old != mapped_new:
+                        allowed_mapped = valid_transitions.get(mapped_old, [])
+                        if mapped_new not in allowed_mapped:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Invalid status transition from {old_status.value} to {new_status.value}."
+                            )
+                c.status = new_status
+        except HTTPException:
+            raise
+        except Exception:
+            pass
         
     if incident_date and incident_date.strip():
         try:
@@ -853,7 +913,7 @@ def update_case(
         
     return {"message": "Case updated successfully"}
 
-# ─── 4. Investigation Notes Endpoints ───
+# ─── 4. Case Notes Endpoints ───
 @router.post("/cases/{case_id}/notes")
 def add_case_note(
     case_id: int,
@@ -865,15 +925,12 @@ def add_case_note(
     if not c:
         raise HTTPException(status_code=404, detail="Case not found")
 
-    if is_admin(user):
-        pass
-    elif is_investigator(user):
-        if c.assigned_expert != user.id:
-            raise HTTPException(status_code=403, detail="Forbidden: You cannot add notes to cases assigned to another investigator.")
-    else:
+    if is_investigator(user):
+        raise HTTPException(status_code=403, detail="Forbidden: Investigators are not allowed to add notes.")
+    if not is_admin(user):
         if c.created_by != user.id:
             raise HTTPException(status_code=403, detail="Forbidden: Access denied to this case.")
-        if c.status not in [StatusEnum.DRAFT, StatusEnum.OPEN]:
+        if c.status != StatusEnum.DRAFT:
             raise HTTPException(status_code=403, detail="Case is submitted and locked. Notes cannot be added.")
         
     new_note = InvestigationNote(
@@ -884,7 +941,7 @@ def add_case_note(
     db.add(new_note)
     db.commit()
     
-    log_audit_event(db, c.id, user.id, "Investigation Notes Updated", f"Note added by {user.full_name}.")
+    log_audit_event(db, c.id, user.id, "Case Notes Updated", f"Note added by {user.full_name}.")
     
     return {"message": "Note added successfully"}
 
@@ -899,17 +956,19 @@ def update_case_note(
     if not n:
         raise HTTPException(status_code=404, detail="Note not found")
         
-    if not is_investigator_or_admin(user):
+    if is_investigator(user):
+        raise HTTPException(status_code=403, detail="Forbidden: Investigators are not allowed to modify notes.")
+    if not is_admin(user):
         if n.user_id != user.id:
             raise HTTPException(status_code=403, detail="Access denied")
-        if n.case and n.case.status not in [StatusEnum.DRAFT, StatusEnum.OPEN]:
+        if n.case and n.case.status != StatusEnum.DRAFT:
             raise HTTPException(status_code=403, detail="Case is submitted and locked. Notes cannot be modified.")
             
     n.note = note
     db.commit()
     
     if n.case_id:
-        log_audit_event(db, n.case_id, user.id, "Investigation Notes Updated", f"Note updated by {user.full_name}.")
+        log_audit_event(db, n.case_id, user.id, "Case Notes Updated", f"Note updated by {user.full_name}.")
         
     return {"message": "Note updated successfully"}
 
@@ -923,10 +982,12 @@ def delete_case_note(
     if not n:
         raise HTTPException(status_code=404, detail="Note not found")
         
-    if not is_investigator_or_admin(user):
+    if is_investigator(user):
+        raise HTTPException(status_code=403, detail="Forbidden: Investigators are not allowed to delete notes.")
+    if not is_admin(user):
         if n.user_id != user.id:
             raise HTTPException(status_code=403, detail="Access denied")
-        if n.case and n.case.status not in [StatusEnum.DRAFT, StatusEnum.OPEN]:
+        if n.case and n.case.status != StatusEnum.DRAFT:
             raise HTTPException(status_code=403, detail="Case is submitted and locked. Notes cannot be deleted.")
             
     case_id = n.case_id
@@ -934,7 +995,7 @@ def delete_case_note(
     db.commit()
     
     if case_id:
-        log_audit_event(db, case_id, user.id, "Investigation Notes Updated", f"Note deleted by {user.full_name}.")
+        log_audit_event(db, case_id, user.id, "Case Notes Updated", f"Note deleted by {user.full_name}.")
         
     return {"message": "Note deleted successfully"}
 
@@ -957,7 +1018,7 @@ async def upload_evidence(
     if not c:
         raise HTTPException(status_code=404, detail="Case not found or access denied")
         
-    if not is_investigator_or_admin(user) and c.status not in [StatusEnum.DRAFT, StatusEnum.OPEN]:
+    if not is_investigator_or_admin(user) and c.status != StatusEnum.DRAFT:
         raise HTTPException(status_code=403, detail="Case is submitted and locked. Evidence cannot be uploaded.")
         
     original_name = file.filename
@@ -1141,7 +1202,7 @@ def delete_evidence(
             raise HTTPException(status_code=403, detail="Investigators are not allowed to delete evidence.")
         if e.uploaded_by != user.id:
             raise HTTPException(status_code=403, detail="Access denied")
-        if e.case and e.case.status not in [StatusEnum.DRAFT, StatusEnum.OPEN]:
+        if e.case and e.case.status != StatusEnum.DRAFT:
             raise HTTPException(status_code=403, detail="Case is submitted and locked. Evidence cannot be deleted.")
             
     case_id = e.case_id
@@ -1240,10 +1301,10 @@ def run_ai_analysis(
     
     db.add(analysis)
     
-    # Transition case status to UNDER_ANALYSIS if applicable
-    if e.case and e.case.status in [StatusEnum.CASE_OPENED, StatusEnum.OPEN, StatusEnum.CASE_FILED]:
-        e.case.status = StatusEnum.UNDER_ANALYSIS
-        log_audit_event(db, e.case.id, user.id, "Status Changed to UNDER_ANALYSIS", f"Case status updated to UNDER_ANALYSIS following AI scan.")
+    # Transition case status to CASE_UNDER_INVESTIGATION if applicable
+    if e.case and e.case.status in [StatusEnum.CASE_FILED, StatusEnum.CASE_OPENED, StatusEnum.OPEN]:
+        e.case.status = StatusEnum.CASE_UNDER_INVESTIGATION
+        log_audit_event(db, e.case.id, user.id, "Status Changed to CASE_UNDER_INVESTIGATION", f"Case status updated to CASE_UNDER_INVESTIGATION following AI scan.")
         
     db.commit()
     db.refresh(analysis)
@@ -1353,9 +1414,9 @@ def add_forensic_review(
     case_id = analysis.evidence.case_id if analysis.evidence else None
     if case_id:
         c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
-        if c and c.status in [StatusEnum.CASE_OPENED, StatusEnum.UNDER_ANALYSIS, StatusEnum.OPEN]:
-            c.status = StatusEnum.EXPERT_REVIEW
-            log_audit_event(db, case_id, user.id, "Status Changed to EXPERT_REVIEW", "Case status updated to EXPERT_REVIEW.")
+        if c and c.status in [StatusEnum.CASE_FILED, StatusEnum.CASE_OPENED, StatusEnum.UNDER_ANALYSIS, StatusEnum.OPEN]:
+            c.status = StatusEnum.CASE_UNDER_INVESTIGATION
+            log_audit_event(db, case_id, user.id, "Status Changed to CASE_UNDER_INVESTIGATION", "Case status updated to CASE_UNDER_INVESTIGATION.")
             
         log_audit_event(db, case_id, user.id, "Expert Review Submitted", f"Expert review submitted with verdict '{dec_enum.value}' by {user.full_name}.")
         
@@ -1733,3 +1794,432 @@ def send_case_message(
         "created_at": format_datetime_utc(new_msg.created_at),
         "read_at": None
     }
+
+def verify_case_access(c: InvestigationCase, user: User):
+    if is_admin(user):
+        return True
+    if c.created_by == user.id:
+        return True
+    if is_investigator(user) and c.assigned_expert == user.id:
+        return True
+    raise HTTPException(status_code=403, detail="Forbidden: You are not assigned to this case.")
+
+# ─── 9. AI Forensic Scan & Report Endpoints ───
+
+@router.post("/cases/{case_id}/scan")
+def trigger_forensic_scan(
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    verify_case_access(c, user)
+
+    evidence_files = db.query(EvidenceFile).filter(EvidenceFile.case_id == case_id).all()
+    if not evidence_files:
+        raise HTTPException(status_code=400, detail="No evidence files uploaded for this case to analyze.")
+
+    # Generate mock analysis results
+    scan_results = MockForensicScanner.analyze_case_evidence(c, evidence_files)
+
+    # Generate PDF report file
+    scan_time_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    pdf_filename = f"Forensic_Report_{c.case_number}_{scan_time_str}.pdf"
+    pdf_dir = os.path.join(os.getcwd(), "uploads", "reports")
+    pdf_path = os.path.join(pdf_dir, pdf_filename)
+
+    creator_user = db.query(User).filter(User.id == c.created_by).first()
+    investigator_user = db.query(User).filter(User.id == c.assigned_expert).first() if c.assigned_expert else None
+
+    scan_meta = {
+        "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        "scan_duration": 10.2,
+        "results": scan_results
+    }
+
+    generate_forensic_pdf_report(c, creator_user, investigator_user, evidence_files, scan_meta, pdf_path)
+
+    # Save to ForensicScan DB table
+    new_scan = ForensicScan(
+        case_id=c.id,
+        scanned_by=user.id,
+        scan_status="COMPLETED",
+        scan_duration=10.2,
+        evidence_count=len(evidence_files),
+        results_json=json.dumps(scan_results),
+        pdf_path=f"/uploads/reports/{pdf_filename}"
+    )
+    db.add(new_scan)
+
+    # Record in Report table as well
+    report_record = Report(
+        case_id=c.id,
+        generated_by=user.id,
+        report_type=ReportTypeEnum.FORENSIC,
+        report_file=f"/uploads/reports/{pdf_filename}"
+    )
+    db.add(report_record)
+    db.commit()
+    db.refresh(new_scan)
+
+    # Log Audit Log Event
+    log_audit_event(
+        db,
+        c.id,
+        user.id,
+        "AI Forensic Scan Executed",
+        f"Simulated AI Forensic Scan executed for {len(evidence_files)} evidence files."
+    )
+
+    return {
+        "scan_id": new_scan.id,
+        "case_id": c.id,
+        "scan_status": new_scan.scan_status,
+        "scan_duration": new_scan.scan_duration,
+        "evidence_count": new_scan.evidence_count,
+        "results": scan_results,
+        "pdf_url": f"/api/v1/user/cases/{c.id}/report/pdf",
+        "created_at": new_scan.created_at.isoformat() if new_scan.created_at else None
+    }
+
+
+@router.get("/cases/{case_id}/scan")
+def get_latest_forensic_scan(
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    verify_case_access(c, user)
+
+    scan = db.query(ForensicScan).filter(ForensicScan.case_id == case_id).order_by(ForensicScan.id.desc()).first()
+    if not scan:
+        return {"scan": None}
+
+    try:
+        results = json.loads(scan.results_json)
+    except Exception:
+        results = []
+
+    return {
+        "scan": {
+            "scan_id": scan.id,
+            "case_id": scan.case_id,
+            "scan_status": scan.scan_status,
+            "scan_duration": scan.scan_duration,
+            "evidence_count": scan.evidence_count,
+            "results": results,
+            "pdf_url": f"/api/v1/user/cases/{c.id}/report/pdf",
+            "created_at": scan.created_at.isoformat() if scan.created_at else None
+        }
+    }
+
+
+@router.get("/cases/{case_id}/report/pdf")
+def download_forensic_pdf_report(
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    verify_case_access(c, user)
+
+    scan = db.query(ForensicScan).filter(ForensicScan.case_id == case_id).order_by(ForensicScan.id.desc()).first()
+    
+    if not scan or not scan.pdf_path:
+        raise HTTPException(status_code=404, detail="Forensic report PDF has not been generated for this case.")
+
+    relative_path = scan.pdf_path.lstrip("/")
+    abs_path = os.path.join(os.getcwd(), relative_path)
+
+    if not os.path.exists(abs_path):
+        evidence_files = db.query(EvidenceFile).filter(EvidenceFile.case_id == case_id).all()
+        try:
+            results = json.loads(scan.results_json)
+        except Exception:
+            results = []
+        creator_user = db.query(User).filter(User.id == c.created_by).first()
+        investigator_user = db.query(User).filter(User.id == c.assigned_expert).first() if c.assigned_expert else None
+        scan_meta = {
+            "created_at": scan.created_at.strftime("%Y-%m-%d %H:%M UTC") if scan.created_at else datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+            "scan_duration": scan.scan_duration,
+            "results": results
+        }
+        generate_forensic_pdf_report(c, creator_user, investigator_user, evidence_files, scan_meta, abs_path)
+
+    filename = os.path.basename(abs_path)
+    return FileResponse(
+        path=abs_path,
+        media_type="application/pdf",
+        filename=filename
+    )
+
+
+# ─── 10. Investigator Rich-Text Notes Endpoints (Tiptap) ───
+
+@router.get("/cases/{case_id}/investigation-notes", response_model=List[InvestigatorNoteResponse])
+@router.get("/cases/{case_id}/investigator-notes", response_model=List[InvestigatorNoteResponse])
+def get_investigator_notes(
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    # Access permission check
+    if not is_admin(user):
+        if is_investigator(user):
+            if c.assigned_expert != user.id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Forbidden: You are not assigned to this case. Access to investigation notes denied."
+                )
+        else:
+            if c.created_by != user.id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Forbidden: You do not have permission to view investigation notes for this case."
+                )
+
+    notes = db.query(InvestigatorNote).filter(InvestigatorNote.case_id == case_id).order_by(InvestigatorNote.id.asc()).all()
+    
+    result = []
+    for note in notes:
+        inv_user = db.query(User).filter(User.id == note.investigator_id).first()
+        inv_name = inv_user.full_name if inv_user else "Investigator"
+        
+        parsed_json = note.content_json
+        if isinstance(parsed_json, str):
+            try:
+                parsed_json = json.loads(parsed_json)
+            except Exception:
+                parsed_json = None
+
+        parsed_ev = note.related_evidence_ids
+        if isinstance(parsed_ev, str):
+            try:
+                parsed_ev = json.loads(parsed_ev)
+            except Exception:
+                parsed_ev = []
+
+        result.append(InvestigatorNoteResponse(
+            id=note.id,
+            case_id=note.case_id,
+            investigator_id=note.investigator_id,
+            investigator_name=inv_name,
+            content=note.content,
+            content_json=parsed_json if isinstance(parsed_json, dict) else None,
+            related_evidence_ids=parsed_ev if isinstance(parsed_ev, list) else [],
+            created_at=note.created_at,
+            updated_at=note.updated_at
+        ))
+    return result
+
+
+@router.post("/cases/{case_id}/investigation-notes", response_model=InvestigatorNoteResponse)
+@router.post("/cases/{case_id}/investigator-notes", response_model=InvestigatorNoteResponse)
+def create_investigator_note(
+    case_id: int,
+    payload: InvestigatorNoteCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    # 1. Verify user is investigator or admin
+    if not is_admin(user) and not is_investigator(user):
+        raise HTTPException(status_code=403, detail="Forbidden: Only investigators can create investigation notes.")
+
+    # 2. Verify case status is CASE_UNDER_INVESTIGATION
+    status_str = c.status.value if hasattr(c.status, "value") else str(c.status)
+    if status_str != "CASE_UNDER_INVESTIGATION" and not is_admin(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Investigation notes can only be created when case is CASE_UNDER_INVESTIGATION."
+        )
+
+    # 3. Verify assigned investigator
+    if not is_admin(user) and c.assigned_expert != user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: You are not assigned to this case. Cannot add investigation notes."
+        )
+
+    cleaned_content = payload.content.strip()
+    if not cleaned_content or cleaned_content in ["<p></p>", "<p><br></p>", "<p><br/></p>"]:
+        raise HTTPException(status_code=400, detail="Cannot save empty investigation note.")
+
+    new_note = InvestigatorNote(
+        case_id=c.id,
+        investigator_id=user.id,
+        content=cleaned_content,
+        content_json=payload.content_json,
+        related_evidence_ids=payload.related_evidence_ids
+    )
+    db.add(new_note)
+    db.commit()
+    db.refresh(new_note)
+
+    log_audit_event(
+        db,
+        c.id,
+        user.id,
+        "Investigator Note Added",
+        f"Added a new rich-text investigation note (ID: {new_note.id})."
+    )
+
+    return InvestigatorNoteResponse(
+        id=new_note.id,
+        case_id=new_note.case_id,
+        investigator_id=new_note.investigator_id,
+        investigator_name=user.full_name,
+        content=new_note.content,
+        content_json=new_note.content_json if isinstance(new_note.content_json, dict) else None,
+        related_evidence_ids=new_note.related_evidence_ids if isinstance(new_note.related_evidence_ids, list) else [],
+        created_at=new_note.created_at,
+        updated_at=new_note.updated_at
+    )
+
+
+@router.put("/cases/{case_id}/investigation-notes/{note_id}", response_model=InvestigatorNoteResponse)
+@router.put("/cases/{case_id}/investigator-notes/{note_id}", response_model=InvestigatorNoteResponse)
+def update_investigator_note(
+    case_id: int,
+    note_id: int,
+    payload: InvestigatorNoteUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    if not is_admin(user) and not is_investigator(user):
+        raise HTTPException(status_code=403, detail="Forbidden: Only investigators can edit investigation notes.")
+
+    status_str = c.status.value if hasattr(c.status, "value") else str(c.status)
+    if status_str != "CASE_UNDER_INVESTIGATION" and not is_admin(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Investigation notes can only be edited when case is CASE_UNDER_INVESTIGATION."
+        )
+
+    if not is_admin(user) and c.assigned_expert != user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: You are not assigned to this case. Cannot edit investigation notes."
+        )
+
+    note = db.query(InvestigatorNote).filter(
+        InvestigatorNote.id == note_id,
+        InvestigatorNote.case_id == case_id
+    ).first()
+
+    if not note:
+        raise HTTPException(status_code=404, detail="Investigation note not found.")
+
+    if not is_admin(user) and note.investigator_id != user.id:
+        raise HTTPException(status_code=403, detail="Forbidden: You can only edit your own investigation notes.")
+
+    if payload.content is not None:
+        cleaned = payload.content.strip()
+        if not cleaned or cleaned in ["<p></p>", "<p><br></p>", "<p><br/></p>"]:
+            raise HTTPException(status_code=400, detail="Cannot update to an empty note.")
+        note.content = cleaned
+
+    if payload.content_json is not None:
+        note.content_json = payload.content_json
+
+    if payload.related_evidence_ids is not None:
+        note.related_evidence_ids = payload.related_evidence_ids
+
+    note.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(note)
+
+    log_audit_event(
+        db,
+        c.id,
+        user.id,
+        "Investigator Note Updated",
+        f"Updated investigation note ID {note.id}."
+    )
+
+    return InvestigatorNoteResponse(
+        id=note.id,
+        case_id=note.case_id,
+        investigator_id=note.investigator_id,
+        investigator_name=user.full_name,
+        content=note.content,
+        content_json=note.content_json if isinstance(note.content_json, dict) else None,
+        related_evidence_ids=note.related_evidence_ids if isinstance(note.related_evidence_ids, list) else [],
+        created_at=note.created_at,
+        updated_at=note.updated_at
+    )
+
+
+@router.delete("/cases/{case_id}/investigation-notes/{note_id}")
+@router.delete("/cases/{case_id}/investigator-notes/{note_id}")
+def delete_investigator_note(
+    case_id: int,
+    note_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    if not is_admin(user) and not is_investigator(user):
+        raise HTTPException(status_code=403, detail="Forbidden: Only investigators can delete investigation notes.")
+
+    status_str = c.status.value if hasattr(c.status, "value") else str(c.status)
+    if status_str != "CASE_UNDER_INVESTIGATION" and not is_admin(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Investigation notes can only be deleted when case is CASE_UNDER_INVESTIGATION."
+        )
+
+    if not is_admin(user) and c.assigned_expert != user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: You are not assigned to this case. Cannot delete investigation notes."
+        )
+
+    note = db.query(InvestigatorNote).filter(
+        InvestigatorNote.id == note_id,
+        InvestigatorNote.case_id == case_id
+    ).first()
+
+    if not note:
+        raise HTTPException(status_code=404, detail="Investigation note not found.")
+
+    if not is_admin(user) and note.investigator_id != user.id:
+        raise HTTPException(status_code=403, detail="Forbidden: You can only delete your own investigation notes.")
+
+    db.delete(note)
+    db.commit()
+
+    log_audit_event(
+        db,
+        c.id,
+        user.id,
+        "Investigator Note Deleted",
+        f"Deleted investigation note ID {note_id}."
+    )
+
+    return {"message": "Investigation note deleted successfully."}
+

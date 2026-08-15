@@ -69,6 +69,22 @@ def init_db_updates():
                 INDEX idx_email (email)
             ) ENGINE=InnoDB;
         """))
+        # Create investigator_notes table if not exists
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS investigator_notes (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                case_id INT NOT NULL,
+                investigator_id INT NOT NULL,
+                content TEXT NOT NULL,
+                content_json JSON NULL,
+                related_evidence_ids JSON NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (case_id) REFERENCES investigation_cases(id) ON DELETE CASCADE,
+                FOREIGN KEY (investigator_id) REFERENCES users(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB;
+        """))
+
         # Check columns on investigation_cases
         res_sub = db.execute(text("SHOW COLUMNS FROM investigation_cases LIKE 'submitted_at'")).fetchone()
         if not res_sub:
@@ -113,6 +129,23 @@ def init_db_updates():
                 read_at DATETIME NULL,
                 FOREIGN KEY (case_id) REFERENCES investigation_cases(id) ON DELETE CASCADE,
                 FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB;
+        """))
+
+        # Create forensic_scans table if not exists
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS forensic_scans (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                case_id INT NOT NULL,
+                scanned_by INT NOT NULL,
+                scan_status VARCHAR(50) NOT NULL DEFAULT 'COMPLETED',
+                scan_duration FLOAT DEFAULT 10.2,
+                evidence_count INT DEFAULT 0,
+                results_json LONGTEXT NOT NULL,
+                pdf_path VARCHAR(500) NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (case_id) REFERENCES investigation_cases(id) ON DELETE CASCADE,
+                FOREIGN KEY (scanned_by) REFERENCES users(id) ON DELETE CASCADE
             ) ENGINE=InnoDB;
         """))
         db.commit()
@@ -298,7 +331,7 @@ def seed_investigation_cases():
                     "description": "AI-generated video submitted as potential digital evidence for forensic analysis and verification.",
                     "created_by": creator_id,
                     "assigned_expert": investigator_id,
-                    "status": StatusEnum.UNDER_ANALYSIS,
+                    "status": StatusEnum.CASE_UNDER_INVESTIGATION,
                     "incident_date": now - timedelta(days=2),
                     "submitted_at": now - timedelta(days=2),
                     "opened_at": now - timedelta(days=1),
@@ -309,7 +342,7 @@ def seed_investigation_cases():
                     "description": "Cloned voice recording claiming to be corporate executive authorizing unauthorized wire transfers.",
                     "created_by": creator_id,
                     "assigned_expert": investigator_id,
-                    "status": StatusEnum.EXPERT_REVIEW,
+                    "status": StatusEnum.CASE_UNDER_INVESTIGATION,
                     "incident_date": now - timedelta(days=5),
                     "submitted_at": now - timedelta(days=4),
                     "opened_at": now - timedelta(days=3),
@@ -342,7 +375,7 @@ def seed_investigation_cases():
                     "description": "Facial recognition spoof attempt detected at automated border control terminal.",
                     "created_by": creator_id,
                     "assigned_expert": investigator_id,
-                    "status": StatusEnum.CASE_OPENED,
+                    "status": StatusEnum.CASE_UNDER_INVESTIGATION,
                     "incident_date": now - timedelta(days=1),
                     "submitted_at": now - timedelta(days=1),
                     "opened_at": now - timedelta(hours=5),
@@ -400,7 +433,17 @@ os.makedirs("uploads", exist_ok=True)
 # Configure CORS so frontend can call backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://127.0.0.1:3001"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+        "http://localhost:3002",
+        "http://127.0.0.1:3002",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000"
+    ],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:[0-9]+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
