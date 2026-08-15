@@ -18,6 +18,8 @@ import {
   FileCheck
 } from "lucide-react";
 
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
+
 export default function RegisterPage() {
   const router = useRouter();
   const [flow, setFlow] = useState<"user" | "investigator" | null>(null);
@@ -98,7 +100,7 @@ export default function RegisterPage() {
       setOtpError("");
       setOtpSuccess("");
 
-      const res = await fetch("http://127.0.0.1:8000/api/v1/auth/send-email-otp", {
+      const res = await fetch(`${BACKEND_URL}/api/v1/auth/send-email-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
@@ -139,7 +141,7 @@ export default function RegisterPage() {
       setOtpError("");
       setOtpSuccess("");
 
-      const res = await fetch("http://127.0.0.1:8000/api/v1/auth/verify-email-otp", {
+      const res = await fetch(`${BACKEND_URL}/api/v1/auth/verify-email-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, otp: otpCode.trim() }),
@@ -187,7 +189,7 @@ export default function RegisterPage() {
       setToken(t);
       setFlow("investigator");
       setTokenVerifying(true);
-      fetch(`http://127.0.0.1:8000/api/v1/auth/verify-invitation?token=${t}`)
+      fetch(`${BACKEND_URL}/api/v1/auth/verify-invitation?token=${t}`)
         .then(res => res.json())
         .then(data => {
           if (data.email) {
@@ -260,7 +262,7 @@ export default function RegisterPage() {
         dataToSend.append("profile_picture_file", profilePicFile);
       }
 
-      let endpoint = "http://127.0.0.1:8000/api/v1/auth/register/user";
+      let endpoint = `${BACKEND_URL}/api/v1/auth/register/user`;
 
       if (flow === "investigator") {
         if (!token) {
@@ -268,7 +270,7 @@ export default function RegisterPage() {
           setLoading(false);
           return;
         }
-        endpoint = "http://127.0.0.1:8000/api/v1/auth/register/investigator";
+        endpoint = `${BACKEND_URL}/api/v1/auth/register/investigator`;
         dataToSend.append("invitation_token", token);
         dataToSend.append("organization", formData.organization);
         dataToSend.append("department", formData.department);

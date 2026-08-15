@@ -37,7 +37,7 @@ import {
 import Link from "next/link";
 import WorkspaceSwitcher from "@/components/WorkspaceSwitcher";
 
-const BACKEND_URL = "http://127.0.0.1:8000";
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
 
 interface UserType {
   id: number;
@@ -145,7 +145,7 @@ export default function AdminDashboard() {
         invitationLogs.filter(l => selectedLogs.includes(l.id)).map(l => l.invitation_id)
       ));
       for (const id of selectedInvitationIds) {
-        await fetch(`http://127.0.0.1:8000/api/admin/invitations/${id}/resend`, {
+        await fetch(`${BACKEND_URL}/api/admin/invitations/${id}/resend`, {
           method: "POST",
           headers: { Authorization: `Bearer ${session.accessToken}` }
         });
@@ -166,7 +166,7 @@ export default function AdminDashboard() {
         invitationLogs.filter(l => selectedLogs.includes(l.id)).map(l => l.invitation_id)
       ));
       for (const id of selectedInvitationIds) {
-        await fetch(`http://127.0.0.1:8000/api/admin/invitations/${id}/cancel`, {
+        await fetch(`${BACKEND_URL}/api/admin/invitations/${id}/cancel`, {
           method: "POST",
           headers: { Authorization: `Bearer ${session.accessToken}` }
         });
@@ -401,7 +401,7 @@ export default function AdminDashboard() {
     if (invitationLogsLoaded && !force) return;
     try {
       setInvitationLogsLoading(true);
-      const res = await fetch(`http://127.0.0.1:8000/api/admin/invitation-logs`, {
+      const res = await fetch(`${BACKEND_URL}/api/admin/invitation-logs`, {
         headers: { Authorization: `Bearer ${session.accessToken}` }
       });
       if (res.ok) {
@@ -506,31 +506,31 @@ export default function AdminDashboard() {
 
   const getCaseStatusBadge = (statusStr: string) => {
     const s = (statusStr || "").toUpperCase();
-    if (s === "CASE_FILED" || s === "DRAFT" || s === "PENDING") {
+    if (s === "DRAFT") {
+      return (
+        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-50 text-slate-700 border border-slate-200/50">
+          Draft
+        </span>
+      );
+    }
+    if (s === "CASE_FILED" || s === "PENDING" || s === "OPEN") {
       return (
         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200/50">
-          Pending
+          Case Filed
         </span>
       );
     }
-    if (s === "CASE_OPENED" || s === "OPEN" || s === "ASSIGNED") {
+    if (s === "CASE_UNDER_INVESTIGATION" || s === "CASE_OPENED" || s === "ASSIGNED" || s === "UNDER_ANALYSIS" || s === "EXPERT_REVIEW" || s === "REVIEW" || s === "UNDER INVESTIGATION") {
       return (
         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200/50">
-          Assigned
-        </span>
-      );
-    }
-    if (s === "UNDER_ANALYSIS" || s === "EXPERT_REVIEW" || s === "REVIEW" || s === "UNDER INVESTIGATION") {
-      return (
-        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200/50">
-          Under Investigation
+          Case Under Investigation
         </span>
       );
     }
     if (s === "CLOSED" || s === "COMPLETED") {
       return (
         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/50">
-          Completed
+          Closed
         </span>
       );
     }
