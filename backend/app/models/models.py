@@ -72,6 +72,7 @@ class InvestigationCase(Base):
     notes = relationship("InvestigationNote", back_populates="case", cascade="all, delete-orphan")
     reports = relationship("Report", back_populates="case", cascade="all, delete-orphan")
     audit_logs = relationship("AuditLog", back_populates="case", cascade="all, delete-orphan")
+    messages = relationship("CaseMessage", back_populates="case", cascade="all, delete-orphan")
 
 
 class EvidenceFile(Base):
@@ -202,3 +203,17 @@ class AuditLog(Base):
 
     case = relationship("InvestigationCase", back_populates="audit_logs")
     user = relationship("User")
+
+
+class CaseMessage(Base):
+    __tablename__ = "case_messages"
+    id = Column(Integer, primary_key=True, index=True)
+    case_id = Column(Integer, ForeignKey("investigation_cases.id"), nullable=False)
+    sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    message = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    read_at = Column(DateTime(timezone=True), nullable=True)
+
+    case = relationship("InvestigationCase", back_populates="messages")
+    sender = relationship("User")
+
