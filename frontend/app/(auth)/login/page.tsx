@@ -156,7 +156,7 @@ export default function LoginPage() {
                 disabled={loading}
                 className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-bold text-white bg-[#CC2200] hover:bg-[#CC2200]/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#CC2200] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {loading ? "Authenticating..." : "Sign in to Dashboard"}
+                {loading ? "Authenticating..." : "Log In"}
               </button>
             </div>
           </form>

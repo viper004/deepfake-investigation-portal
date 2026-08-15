@@ -736,6 +736,48 @@ export default function UserDashboard() {
   };
 
   // ─── Case Messaging / Chat Logic ───
+  const formatMessageTimestamp = (dateStr: string | null): string => {
+    if (!dateStr) return "";
+    try {
+      let parseable = dateStr;
+      // If the string doesn't specify offset or 'Z', treat it as UTC
+      if (!parseable.endsWith("Z") && !parseable.includes("+") && !parseable.includes("-", 10)) {
+        parseable = parseable + "Z";
+      }
+
+      const d = new Date(parseable);
+      if (isNaN(d.getTime())) return "";
+
+      const now = new Date();
+      const isSameDay = (d1: Date, d2: Date) =>
+        d1.getFullYear() === d2.getFullYear() &&
+        d1.getMonth() === d2.getMonth() &&
+        d1.getDate() === d2.getDate();
+
+      const yesterday = new Date(now);
+      yesterday.setDate(now.getDate() - 1);
+
+      const hoursNum = d.getHours();
+      const minutesStr = d.getMinutes().toString().padStart(2, "0");
+      const ampm = hoursNum >= 12 ? "PM" : "AM";
+      const hours12 = hoursNum % 12 || 12;
+      const timeFormatted = `${hours12}:${minutesStr} ${ampm}`;
+
+      if (isSameDay(d, now)) {
+        return timeFormatted;
+      } else if (isSameDay(d, yesterday)) {
+        return `Yesterday, ${timeFormatted}`;
+      } else {
+        const day = d.getDate().toString().padStart(2, "0");
+        const month = (d.getMonth() + 1).toString().padStart(2, "0");
+        const year = d.getFullYear();
+        return `${day}/${month}/${year}, ${timeFormatted}`;
+      }
+    } catch (e) {
+      return "";
+    }
+  };
+
   const fetchCaseMessages = useCallback(async (caseId: number, silent = false) => {
     if (!session?.accessToken) return;
     try {
@@ -745,7 +787,12 @@ export default function UserDashboard() {
       });
       if (res.ok) {
         const data = await res.json();
-        setCaseMessages(data.messages || []);
+        const rawMsgs: MessageType[] = data.messages || [];
+        // Sort chronologically: oldest at top (index 0) -> newest at bottom
+        const sorted = [...rawMsgs].sort((a, b) => 
+          (new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()) || (a.id - b.id)
+        );
+        setCaseMessages(sorted);
       }
     } catch (e) {
       console.error("Error fetching case messages", e);
@@ -754,16 +801,19 @@ export default function UserDashboard() {
     }
   }, [session]);
 
-  // Auto scroll chat to newest message
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  // Auto scroll chat to newest message at the bottom
+  const scrollToBottom = (smooth = true) => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: smooth ? "smooth" : "auto" });
+    }
   };
 
   useEffect(() => {
     if (isChatModalOpen) {
-      scrollToBottom();
+      const timer = setTimeout(() => scrollToBottom(false), 80);
+      return () => clearTimeout(timer);
     }
-  }, [caseMessages, isChatModalOpen]);
+  }, [isChatModalOpen, caseMessages.length]);
 
   // Real-time polling for messages when Chat Modal is open
   useEffect(() => {
@@ -793,8 +843,13 @@ export default function UserDashboard() {
       });
 
       if (res.ok) {
-        const newMsg = await res.json();
-        setCaseMessages(prev => [...prev, newMsg]);
+        const newMsg: MessageType = await res.json();
+        setCaseMessages(prev => 
+          [...prev, newMsg].sort((a, b) => 
+            (new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()) || (a.id - b.id)
+          )
+        );
+        setTimeout(() => scrollToBottom(true), 50);
         fetchCaseDetail(selectedCaseId);
         fetchNotifications();
       } else {
@@ -811,10 +866,24 @@ export default function UserDashboard() {
     }
   };
 
+  const getTodayString = () => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = (d.getMonth() + 1).toString().padStart(2, "0");
+    const day = d.getDate().toString().padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
+
   // ─── Create Case ───
   const handleCreateCase = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!session?.accessToken) return;
+
+    if (createCaseForm.incident_date && createCaseForm.incident_date > getTodayString()) {
+      showToast("Incident date cannot be in the future.", "error");
+      return;
+    }
+
     try {
       setSubmitting(true);
       const formData = new FormData();
@@ -851,6 +920,12 @@ export default function UserDashboard() {
   const handleEditCase = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedCaseId || !session?.accessToken) return;
+
+    if (editCaseForm.incident_date && editCaseForm.incident_date > getTodayString()) {
+      showToast("Incident date cannot be in the future.", "error");
+      return;
+    }
+
     try {
       setSubmitting(true);
       const formData = new FormData();
@@ -3436,10 +3511,20 @@ export default function UserDashboard() {
                 <label className="block text-xs font-bold uppercase text-[#0a0a0a]/60 mb-1">Incident Date</label>
                 <input
                   type="date"
+                  max={getTodayString()}
                   value={createCaseForm.incident_date}
                   onChange={(e) => setCreateCaseForm(prev => ({ ...prev, incident_date: e.target.value }))}
-                  className="w-full text-sm px-3.5 py-2 bg-[#fafafa] border border-[#e5e5e5] rounded outline-none focus:ring-1 focus:ring-[#CC2200] focus:border-[#CC2200]"
+                  className={`w-full text-sm px-3.5 py-2 bg-[#fafafa] border rounded outline-none focus:ring-1 ${
+                    createCaseForm.incident_date && createCaseForm.incident_date > getTodayString()
+                      ? "border-[#CC2200] focus:ring-[#CC2200] focus:border-[#CC2200]"
+                      : "border-[#e5e5e5] focus:ring-[#CC2200] focus:border-[#CC2200]"
+                  }`}
                 />
+                {createCaseForm.incident_date && createCaseForm.incident_date > getTodayString() && (
+                  <p className="text-xs text-[#CC2200] font-medium mt-1">
+                    Incident date cannot be in the future.
+                  </p>
+                )}
               </div>
 
               <div className="flex justify-end gap-2.5 pt-4 border-t border-[#e5e5e5]">
@@ -3452,8 +3537,8 @@ export default function UserDashboard() {
                 </button>
                 <button
                   type="submit"
-                  disabled={submitting}
-                  className="px-5 py-2 bg-[#CC2200] text-white rounded text-xs font-bold hover:opacity-90 shadow disabled:opacity-50"
+                  disabled={submitting || (!!createCaseForm.incident_date && createCaseForm.incident_date > getTodayString())}
+                  className="px-5 py-2 bg-[#CC2200] text-white rounded text-xs font-bold hover:opacity-90 shadow disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {submitting ? "Creating..." : "Create Case"}
                 </button>
@@ -3516,10 +3601,16 @@ export default function UserDashboard() {
                   <label className="block text-xs font-bold uppercase text-[#0a0a0a]/60 mb-1">Incident Date</label>
                   <input
                     type="date"
+                    max={getTodayString()}
                     value={editCaseForm.incident_date}
                     onChange={(e) => setEditCaseForm(prev => ({ ...prev, incident_date: e.target.value }))}
                     className="w-full text-sm px-3 py-1.5 bg-[#fafafa] border border-[#e5e5e5] rounded outline-none text-[#0a0a0a]"
                   />
+                  {editCaseForm.incident_date && editCaseForm.incident_date > getTodayString() && (
+                    <p className="text-xs text-[#CC2200] font-medium mt-1">
+                      Incident date cannot be in the future.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -3942,18 +4033,20 @@ export default function UserDashboard() {
             </div>
 
             {/* Scrollable Message History Area */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-3.5 bg-slate-50/60">
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/60 min-h-0">
               {messagesLoading ? (
                 <div className="py-20 flex flex-col items-center justify-center gap-2 text-xs text-[#0a0a0a]/50">
                   <Loader2 className="h-6 w-6 animate-spin text-[#CC2200]" />
-                  <span>Loading messages...</span>
+                  <span>Loading conversation...</span>
                 </div>
               ) : caseMessages.length === 0 ? (
                 <div className="py-20 flex flex-col items-center justify-center text-center p-6 space-y-2 text-[#0a0a0a]/50">
                   <MessageSquare className="h-10 w-10 text-slate-300 stroke-[1.5]" />
-                  <p className="font-semibold text-sm text-[#0a0a0a]">No messages yet</p>
-                  <p className="text-xs text-[#0a0a0a]/50 max-w-xs">
-                    Start the conversation regarding case #{caseDetail.case_number}.
+                  <p className="font-semibold text-sm text-[#0a0a0a]">No messages yet.</p>
+                  <p className="text-xs text-[#0a0a0a]/60 max-w-xs">
+                    {isInvestigator 
+                      ? "Send a message to the case owner." 
+                      : "Start a conversation with the investigator."}
                   </p>
                 </div>
               ) : (
@@ -3965,39 +4058,34 @@ export default function UserDashboard() {
                       className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}
                     >
                       {/* Sender Name & Role */}
-                      <div className="flex items-center gap-1.5 mb-1 px-1 text-[10px] font-semibold text-[#0a0a0a]/50">
+                      <div className={`flex items-center gap-1.5 mb-1 px-1 text-[10px] font-bold tracking-wider uppercase text-[#0a0a0a]/60 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
                         <span>{msg.sender_name}</span>
-                        <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold uppercase ${
+                        <span className={`px-1.5 py-0.2 rounded text-[9px] font-extrabold uppercase ${
                           msg.sender_role === "Lead Investigator"
-                            ? "bg-amber-100 text-amber-800"
-                            : "bg-blue-100 text-blue-800"
+                            ? "bg-amber-100 text-amber-800 border border-amber-200"
+                            : "bg-blue-100 text-blue-800 border border-blue-200"
                         }`}>
-                          {msg.sender_role}
+                          {msg.sender_role === "Lead Investigator" ? "LEAD INVESTIGATOR" : "CASE OWNER"}
                         </span>
                       </div>
 
                       {/* Message Bubble */}
                       <div
-                        className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs shadow-xs space-y-1 ${
+                        className={`max-w-[82%] rounded-2xl px-4 py-2.5 text-xs shadow-xs space-y-1 ${
                           isMe
-                            ? "bg-[#CC2200] text-white rounded-br-xs"
-                            : "bg-white text-[#0a0a0a] border border-[#e5e5e5] rounded-bl-xs"
+                            ? "bg-[#CC2200] text-white rounded-tr-xs"
+                            : "bg-white text-[#0a0a0a] border border-[#e5e5e5] rounded-tl-xs"
                         }`}
                       >
                         <p className="whitespace-pre-wrap break-words leading-relaxed font-normal">
                           {msg.message}
                         </p>
                         <div
-                          className={`text-[9px] text-right font-medium ${
-                            isMe ? "text-white/70" : "text-[#0a0a0a]/40"
+                          className={`text-[9px] text-right font-semibold ${
+                            isMe ? "text-white/80" : "text-[#0a0a0a]/40"
                           }`}
                         >
-                          {msg.created_at
-                            ? new Date(msg.created_at).toLocaleTimeString([], {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              })
-                            : ""}
+                          {formatMessageTimestamp(msg.created_at)}
                         </div>
                       </div>
                     </div>
@@ -4008,7 +4096,7 @@ export default function UserDashboard() {
             </div>
 
             {/* Message Input Form */}
-            <form onSubmit={handleSendMessage} className="p-3 bg-white border-t border-[#e5e5e5] flex gap-2 items-end">
+            <form onSubmit={handleSendMessage} className="p-3 bg-white border-t border-[#e5e5e5] flex gap-2 items-end shrink-0">
               <textarea
                 rows={2}
                 placeholder="Type your message... (Shift + Enter for new line)"
