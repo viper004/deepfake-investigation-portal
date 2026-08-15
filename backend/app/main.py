@@ -101,6 +101,20 @@ def init_db_updates():
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             ) ENGINE=InnoDB;
         """))
+
+        # Create case_messages table if not exists
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS case_messages (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                case_id INT NOT NULL,
+                sender_id INT NOT NULL,
+                message TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                read_at DATETIME NULL,
+                FOREIGN KEY (case_id) REFERENCES investigation_cases(id) ON DELETE CASCADE,
+                FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB;
+        """))
         db.commit()
     except Exception as e:
         print("Database migration/update error:", e)

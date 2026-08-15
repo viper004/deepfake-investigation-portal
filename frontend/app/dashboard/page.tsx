@@ -23,7 +23,6 @@ import {
   X,
   Lock,
   ShieldAlert,
-  FileDown,
   Clock,
   Sparkles,
   Activity,
@@ -44,7 +43,9 @@ import {
   ShieldCheck,
   History,
   Maximize2,
-  AlertTriangle
+  AlertTriangle,
+  MessageSquare,
+  MessageCircle
 } from "lucide-react";
 import WorkspaceSwitcher from "@/components/WorkspaceSwitcher";
 
@@ -64,6 +65,18 @@ interface CaseType {
   status: string;
   incident_date: string | null;
   created_at: string | null;
+  submitted_at?: string | null;
+  opened_at?: string | null;
+  assigned_expert?: string | null;
+  assigned_expert_id?: number | null;
+  assigned_expert_name?: string | null;
+  created_by?: number;
+  creator_name?: string | null;
+  evidence?: EvidenceType[];
+  forensic_reviews?: ForensicReviewType[];
+  notes?: CaseNoteType[];
+  reports?: ReportType[];
+  audit_logs?: AuditLogType[];
 }
 
 interface EvidenceType {
@@ -130,6 +143,18 @@ interface AuditLogType {
   description: string;
   user_name: string;
   timestamp: string | null;
+}
+
+interface MessageType {
+  id: number;
+  case_id: number;
+  sender_id: number;
+  sender_name: string;
+  sender_role: string;
+  is_me: boolean;
+  message: string;
+  created_at: string | null;
+  read_at?: string | null;
 }
 
 interface NotificationType {
@@ -247,6 +272,12 @@ export default function UserDashboard() {
   const [forensicForm, setForensicForm] = useState({ decision: "APPROVED", observations: "" });
   const [isUploadingSingle, setIsUploadingSingle] = useState(false);
   const [auditModalOpen, setAuditModalOpen] = useState(false);
+  const [isChatModalOpen, setIsChatModalOpen] = useState(false);
+  const [caseMessages, setCaseMessages] = useState<MessageType[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [newMessageText, setNewMessageText] = useState("");
+  const [sendingMessage, setSendingMessage] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   // Citizen Submit Case for Review
   const handleSubmitCaseForReview = async () => {
@@ -704,6 +735,82 @@ export default function UserDashboard() {
     fetchCaseDetail(id);
   };
 
+  // ─── Case Messaging / Chat Logic ───
+  const fetchCaseMessages = useCallback(async (caseId: number, silent = false) => {
+    if (!session?.accessToken) return;
+    try {
+      if (!silent) setMessagesLoading(true);
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/cases/${caseId}/messages`, {
+        headers: { "Authorization": `Bearer ${session.accessToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCaseMessages(data.messages || []);
+      }
+    } catch (e) {
+      console.error("Error fetching case messages", e);
+    } finally {
+      if (!silent) setMessagesLoading(false);
+    }
+  }, [session]);
+
+  // Auto scroll chat to newest message
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    if (isChatModalOpen) {
+      scrollToBottom();
+    }
+  }, [caseMessages, isChatModalOpen]);
+
+  // Real-time polling for messages when Chat Modal is open
+  useEffect(() => {
+    if (!isChatModalOpen || !selectedCaseId) return;
+    const interval = setInterval(() => {
+      fetchCaseMessages(selectedCaseId, true);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [isChatModalOpen, selectedCaseId, fetchCaseMessages]);
+
+  const handleSendMessage = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!newMessageText.trim() || !selectedCaseId || !session?.accessToken) return;
+
+    const msgText = newMessageText.trim();
+    setNewMessageText("");
+    setSendingMessage(true);
+
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/cases/${selectedCaseId}/messages`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.accessToken}`
+        },
+        body: JSON.stringify({ message: msgText })
+      });
+
+      if (res.ok) {
+        const newMsg = await res.json();
+        setCaseMessages(prev => [...prev, newMsg]);
+        fetchCaseDetail(selectedCaseId);
+        fetchNotifications();
+      } else {
+        const err = await res.json();
+        showToast(err.detail || "Failed to send message", "error");
+        setNewMessageText(msgText);
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("Failed to send message.", "error");
+      setNewMessageText(msgText);
+    } finally {
+      setSendingMessage(false);
+    }
+  };
+
   // ─── Create Case ───
   const handleCreateCase = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1155,27 +1262,6 @@ export default function UserDashboard() {
       fetchReports();
     }
   }, [activeTab, fetchReports]);
-
-  const handleGenerateReport = async (caseId: number, type: string) => {
-    if (!session?.accessToken) return;
-    try {
-      const formData = new FormData();
-      formData.append("report_type", type);
-      const res = await fetch(`${BACKEND_URL}/api/v1/user/cases/${caseId}/reports`, {
-        method: "POST",
-        headers: { "Authorization": `Bearer ${session.accessToken}` },
-        body: formData
-      });
-      if (res.ok) {
-        showToast("Court-ready Forensic Report generated", "success");
-        if (selectedCaseId) fetchCaseDetail(selectedCaseId);
-        fetchReports();
-        refreshAll();
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  };
 
   // ─── Profile Update ───
   const handleUpdateProfile = async (e: React.FormEvent) => {
@@ -1962,7 +2048,7 @@ export default function UserDashboard() {
                 <div className="flex items-center gap-2">
                   {isInvestigator ? (
                     <>
-                      {caseDetail.status === "CASE_FILED" && !caseDetail.assigned_expert && (
+                      {caseDetail.status === "CASE_FILED" && !(caseDetail.assigned_expert_id || caseDetail.assigned_expert_name || caseDetail.assigned_expert) && (
                         <button
                           onClick={() => setIsClaimConfirmModalOpen(true)}
                           className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded bg-[#CC2200] hover:bg-[#a81c00] text-white text-xs font-bold shadow-md transition-colors"
@@ -1971,23 +2057,14 @@ export default function UserDashboard() {
                           Investigate This Case
                         </button>
                       )}
-                      {caseDetail.assigned_expert && (
-                        <>
-                          <button
-                            onClick={() => setIsEditCaseModalOpen(true)}
-                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded border border-[#e5e5e5] text-xs font-semibold bg-white hover:bg-slate-50 transition-colors"
-                          >
-                            <Edit2 className="h-3.5 w-3.5" />
-                            Edit Details
-                          </button>
-                          <button
-                            onClick={() => handleGenerateReport(caseDetail.id, "FINAL")}
-                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded bg-[#CC2200] text-white text-xs font-semibold shadow hover:opacity-90 transition-opacity"
-                          >
-                            <FileText className="h-3.5 w-3.5" />
-                            Generate Report
-                          </button>
-                        </>
+                      {(caseDetail.assigned_expert_id || caseDetail.assigned_expert_name || caseDetail.assigned_expert) && (
+                        <button
+                          onClick={() => setIsEditCaseModalOpen(true)}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded border border-[#e5e5e5] text-xs font-semibold bg-white hover:bg-slate-50 transition-colors"
+                        >
+                          <Edit2 className="h-3.5 w-3.5" />
+                          Edit Details
+                        </button>
                       )}
                     </>
                   ) : (
@@ -2062,6 +2139,28 @@ export default function UserDashboard() {
                       <History className="h-3.5 w-3.5 text-[#CC2200]" />
                       Audit Trail
                     </button>
+                    {(caseDetail.assigned_expert_id || caseDetail.assigned_expert_name || caseDetail.assigned_expert) ? (
+                      <button
+                        onClick={() => {
+                          setIsChatModalOpen(true);
+                          fetchCaseMessages(caseDetail.id);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#CC2200] hover:bg-[#a81c00] text-xs font-bold text-white transition-colors shadow-xs cursor-pointer"
+                        title="Message assigned investigator/client"
+                      >
+                        <MessageSquare className="h-3.5 w-3.5" />
+                        Message
+                      </button>
+                    ) : (
+                      <button
+                        disabled
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-100 text-xs font-semibold border border-[#e5e5e5] text-[#0a0a0a]/40 cursor-not-allowed opacity-60"
+                        title="Messaging will be available after an investigator is assigned."
+                      >
+                        <MessageSquare className="h-3.5 w-3.5" />
+                        Message
+                      </button>
+                    )}
                   </div>
                 </div>
                 <p className="text-sm text-[#0a0a0a]/75 leading-relaxed">{caseDetail.description || "No description provided."}</p>
@@ -2077,7 +2176,7 @@ export default function UserDashboard() {
                   </div>
                   <div>
                     <span className="block text-[10px] text-[#0a0a0a]/40 uppercase mb-0.5">Assigned Expert</span>
-                    {caseDetail.assigned_expert || "Awaiting Assignment"}
+                    {caseDetail.assigned_expert_name || caseDetail.assigned_expert || "Awaiting Assignment"}
                   </div>
                   <div>
                     <span className="block text-[10px] text-[#0a0a0a]/40 uppercase mb-0.5">Evidence Files</span>
@@ -2344,7 +2443,7 @@ export default function UserDashboard() {
                             ) : (
                               <>
                                 <p className="text-xs text-[#0a0a0a]/80 mt-1 whitespace-pre-wrap">{note.note}</p>
-                                {((isInvestigator && caseDetail.assigned_expert) || caseDetail.status === "DRAFT" || caseDetail.status === "OPEN") && (
+                                {((isInvestigator && (caseDetail.assigned_expert_id || caseDetail.assigned_expert_name || caseDetail.assigned_expert)) || caseDetail.status === "DRAFT" || caseDetail.status === "OPEN") && (
                                   <div className="opacity-0 group-hover:opacity-100 absolute bottom-1 right-2 flex gap-1.5 transition-opacity bg-white/95 px-1 py-0.5 rounded shadow-sm">
                                     <button onClick={() => startEditNote(note.id, note.note)} className="text-[10px] font-bold text-blue-600 hover:underline">Edit</button>
                                     <button onClick={() => handleDeleteNote(note.id)} className="text-[10px] font-bold text-rose-600 hover:underline">Delete</button>
@@ -2358,7 +2457,7 @@ export default function UserDashboard() {
                     </div>
 
                     {/* Note submit form - Allowed in Draft or for Assigned Investigator */}
-                    {((isInvestigator && caseDetail.assigned_expert) || caseDetail.status === "DRAFT" || caseDetail.status === "OPEN") && (
+                    {((isInvestigator && (caseDetail.assigned_expert_id || caseDetail.assigned_expert_name || caseDetail.assigned_expert)) || caseDetail.status === "DRAFT" || caseDetail.status === "OPEN") && (
                       <form onSubmit={handleAddNote} className="p-3 border-t border-[#e5e5e5] bg-slate-50 flex gap-2">
                         <input
                           type="text"
@@ -2376,40 +2475,6 @@ export default function UserDashboard() {
                       </form>
                     )}
                   </div>
-
-                  {/* Reports generated for case - Investigator Only */}
-                  {isInvestigator && (
-                    <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm">
-                      <div className="px-5 py-4 border-b border-[#e5e5e5] bg-slate-50/50">
-                        <h3 className="font-bold text-sm">Generated Case Reports</h3>
-                      </div>
-                      <div className="p-4 space-y-2">
-                        {caseDetail.reports.length === 0 ? (
-                          <div className="text-center text-xs text-[#0a0a0a]/40 py-4">No reports generated.</div>
-                        ) : (
-                          caseDetail.reports.map((rep: ReportType) => (
-                            <div key={rep.id} className="p-3 border border-[#e5e5e5] rounded flex items-center justify-between hover:bg-slate-50/30">
-                              <div className="flex items-center gap-2">
-                                <FileText className="h-4 w-4 text-[#CC2200]" />
-                                <div className="text-left">
-                                  <span className="text-xs font-bold text-[#0a0a0a]">{rep.report_type} Report</span>
-                                  <span className="block text-[9px] text-[#0a0a0a]/40">{new Date(rep.generated_at!).toLocaleDateString()}</span>
-                                </div>
-                              </div>
-                              <a
-                                href={`${BACKEND_URL}${rep.report_file}`}
-                                download
-                                className="p-1 border border-[#e5e5e5] rounded hover:bg-slate-100 text-[#0a0a0a]/60 flex items-center justify-center"
-                                title="Download PDF"
-                              >
-                                <FileDown className="h-3.5 w-3.5" />
-                              </a>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  )}
 
                 </div>
 
@@ -3740,6 +3805,239 @@ export default function UserDashboard() {
                 View Assigned Cases
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ──────────────── CASE AUDIT TRAIL MODAL ──────────────── */}
+      {auditModalOpen && caseDetail && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in text-left"
+          onClick={() => setAuditModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-xl max-w-2xl w-full max-h-[85vh] flex flex-col shadow-2xl border border-[#e5e5e5] animate-scale-up overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-[#e5e5e5] flex justify-between items-center bg-slate-50">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-[#CC2200]/10 rounded-full text-[#CC2200]">
+                  <History className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-[#0a0a0a]">Case Audit Trail</h3>
+                  <p className="text-xs text-[#0a0a0a]/50">
+                    Official investigation event history for Case #{caseDetail.case_number}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setAuditModalOpen(false)}
+                className="p-1 rounded-md hover:bg-slate-200 transition-colors text-[#0a0a0a]/60 hover:text-[#CC2200]"
+                title="Close Modal"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Content / Timeline */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-slate-50/50">
+              {(!caseDetail.audit_logs || caseDetail.audit_logs.length === 0) ? (
+                <div className="py-12 text-center text-xs text-[#0a0a0a]/40 font-medium">
+                  No audit log records available for this case yet.
+                </div>
+              ) : (
+                <div className="relative border-l-2 border-slate-200 ml-4 space-y-6">
+                  {caseDetail.audit_logs.map((log: AuditLogType) => (
+                    <div key={log.id} className="relative pl-6">
+                      {/* Timeline Node */}
+                      <div className="absolute -left-[9px] top-1.5 w-4 h-4 rounded-full border-2 border-white bg-[#CC2200] shadow-xs" />
+                      
+                      <div className="bg-white p-4 rounded-lg border border-[#e5e5e5] shadow-xs space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-bold bg-slate-100 text-[#0a0a0a] border border-slate-200">
+                            {log.action}
+                          </span>
+                          <span className="text-[11px] text-[#0a0a0a]/50 flex items-center gap-1 font-medium">
+                            <Clock className="h-3 w-3" />
+                            {log.timestamp ? new Date(log.timestamp).toLocaleString() : "N/A"}
+                          </span>
+                        </div>
+
+                        <p className="text-xs text-[#0a0a0a]/80 font-medium leading-relaxed">
+                          {log.description}
+                        </p>
+
+                        <div className="pt-1 flex items-center gap-1.5 text-[11px] text-[#0a0a0a]/50 border-t border-slate-100">
+                          <User className="h-3 w-3 text-slate-400" />
+                          <span>Performed by: <strong className="text-[#0a0a0a]/80 font-semibold">{log.user_name || "System"}</strong></span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-3.5 border-t border-[#e5e5e5] bg-white flex justify-between items-center text-xs text-[#0a0a0a]/60">
+              <span className="font-semibold">Total Event Entries: <strong>{caseDetail.audit_logs?.length || 0}</strong></span>
+              <button
+                type="button"
+                onClick={() => setAuditModalOpen(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-[#0a0a0a] rounded-md text-xs font-bold transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ──────────────── CASE MESSAGING / CHAT MODAL ──────────────── */}
+      {isChatModalOpen && caseDetail && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in text-left"
+          onClick={() => setIsChatModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-xl max-w-lg w-full h-[650px] max-h-[90vh] flex flex-col shadow-2xl border border-[#e5e5e5] animate-scale-up overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="px-5 py-4 border-b border-[#e5e5e5] flex justify-between items-center bg-slate-50">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-[#CC2200]/10 rounded-full text-[#CC2200]">
+                  <MessageSquare className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-[#0a0a0a] flex items-center gap-2">
+                    Case Messages
+                  </h3>
+                  <p className="text-xs text-[#0a0a0a]/50">
+                    Case: <span className="font-semibold text-[#CC2200]">{caseDetail.case_number}</span>
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsChatModalOpen(false)}
+                className="p-1 rounded-md hover:bg-slate-200 transition-colors text-[#0a0a0a]/60 hover:text-[#CC2200]"
+                title="Close Messages"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Sub-header with Participant Names */}
+            <div className="px-5 py-2.5 bg-slate-100/70 border-b border-slate-200 text-xs flex justify-between items-center text-[#0a0a0a]/70 font-medium">
+              <div>
+                <span className="text-[#0a0a0a]/40 text-[10px] block uppercase font-bold">Investigator</span>
+                <span className="font-bold text-[#0a0a0a]">{caseDetail.assigned_expert_name || caseDetail.assigned_expert || "Assigned Expert"}</span>
+              </div>
+              <div className="text-right">
+                <span className="text-[#0a0a0a]/40 text-[10px] block uppercase font-bold">Case Owner</span>
+                <span className="font-bold text-[#0a0a0a]">{caseDetail.creator_name || "Reporter"}</span>
+              </div>
+            </div>
+
+            {/* Scrollable Message History Area */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-3.5 bg-slate-50/60">
+              {messagesLoading ? (
+                <div className="py-20 flex flex-col items-center justify-center gap-2 text-xs text-[#0a0a0a]/50">
+                  <Loader2 className="h-6 w-6 animate-spin text-[#CC2200]" />
+                  <span>Loading messages...</span>
+                </div>
+              ) : caseMessages.length === 0 ? (
+                <div className="py-20 flex flex-col items-center justify-center text-center p-6 space-y-2 text-[#0a0a0a]/50">
+                  <MessageSquare className="h-10 w-10 text-slate-300 stroke-[1.5]" />
+                  <p className="font-semibold text-sm text-[#0a0a0a]">No messages yet</p>
+                  <p className="text-xs text-[#0a0a0a]/50 max-w-xs">
+                    Start the conversation regarding case #{caseDetail.case_number}.
+                  </p>
+                </div>
+              ) : (
+                caseMessages.map((msg) => {
+                  const isMe = msg.is_me;
+                  return (
+                    <div
+                      key={msg.id}
+                      className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}
+                    >
+                      {/* Sender Name & Role */}
+                      <div className="flex items-center gap-1.5 mb-1 px-1 text-[10px] font-semibold text-[#0a0a0a]/50">
+                        <span>{msg.sender_name}</span>
+                        <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold uppercase ${
+                          msg.sender_role === "Lead Investigator"
+                            ? "bg-amber-100 text-amber-800"
+                            : "bg-blue-100 text-blue-800"
+                        }`}>
+                          {msg.sender_role}
+                        </span>
+                      </div>
+
+                      {/* Message Bubble */}
+                      <div
+                        className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs shadow-xs space-y-1 ${
+                          isMe
+                            ? "bg-[#CC2200] text-white rounded-br-xs"
+                            : "bg-white text-[#0a0a0a] border border-[#e5e5e5] rounded-bl-xs"
+                        }`}
+                      >
+                        <p className="whitespace-pre-wrap break-words leading-relaxed font-normal">
+                          {msg.message}
+                        </p>
+                        <div
+                          className={`text-[9px] text-right font-medium ${
+                            isMe ? "text-white/70" : "text-[#0a0a0a]/40"
+                          }`}
+                        >
+                          {msg.created_at
+                            ? new Date(msg.created_at).toLocaleTimeString([], {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })
+                            : ""}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+
+            {/* Message Input Form */}
+            <form onSubmit={handleSendMessage} className="p-3 bg-white border-t border-[#e5e5e5] flex gap-2 items-end">
+              <textarea
+                rows={2}
+                placeholder="Type your message... (Shift + Enter for new line)"
+                value={newMessageText}
+                onChange={(e) => setNewMessageText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSendMessage();
+                  }
+                }}
+                className="flex-1 text-xs p-2.5 bg-slate-50 border border-[#e5e5e5] rounded-lg outline-none focus:ring-1 focus:ring-[#CC2200] focus:bg-white resize-none text-[#0a0a0a]"
+              />
+              <button
+                type="submit"
+                disabled={sendingMessage || !newMessageText.trim()}
+                className="px-4 py-3 bg-[#CC2200] hover:bg-[#a81c00] disabled:opacity-50 text-white rounded-lg font-bold text-xs shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer h-[42px]"
+                title="Send Message"
+              >
+                {sendingMessage ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <>
+                    <span>Send</span>
+                    <Send className="h-3.5 w-3.5" />
+                  </>
+                )}
+              </button>
+            </form>
           </div>
         </div>
       )}

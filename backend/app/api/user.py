@@ -10,10 +10,12 @@ from sqlalchemy import or_, desc, text, and_
 from jose import jwt, JWTError
 from fastapi.responses import FileResponse
 
+from pydantic import BaseModel
+
 from app.database.database import SessionLocal
 from app.models.models import (
     InvestigationCase, EvidenceFile, MediaMetadata, AIModel, AIAnalysis,
-    ForensicReview, InvestigationNote, Report, Notification, AuditLog,
+    ForensicReview, InvestigationNote, Report, Notification, AuditLog, CaseMessage,
     StatusEnum, FileTypeEnum, AIResultEnum, ReportTypeEnum, MediaTypeEnum
 )
 from app.models.user import User
@@ -378,6 +380,7 @@ def get_cases(
             "submitted_at": c.submitted_at.isoformat() if c.submitted_at else (c.created_at.isoformat() if c.created_at else None),
             "opened_at": c.opened_at.isoformat() if c.opened_at else None,
             "updated_at": c.updated_at.isoformat() if c.updated_at else (c.created_at.isoformat() if c.created_at else None),
+            "assigned_expert": c.expert.full_name if c.expert else None,
             "assigned_expert_id": c.assigned_expert,
             "assigned_expert_name": c.expert.full_name if c.expert else None,
             "created_by": c.created_by,
@@ -587,7 +590,7 @@ def open_case(
     c.assigned_expert = user.id
     db.commit()
     
-    log_audit_event(db, c.id, user.id, "Case Opened", f"Investigation accepted by {user.full_name}")
+    log_audit_event(db, c.id, user.id, "Case Assigned to Investigator", f"Investigation accepted and assigned to investigator {user.full_name}.")
     if c.created_by:
         add_user_notification(
             db, c.created_by, "Case Opened",
@@ -598,6 +601,43 @@ def open_case(
         "message": "Case opened successfully",
         "status": c.status.value,
         "opened_at": c.opened_at.isoformat()
+    }
+
+@router.post("/cases/{case_id}/unassign")
+def unassign_case(
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    if not is_investigator_or_admin(user):
+        raise HTTPException(status_code=403, detail="Only investigators or admins can unassign cases.")
+        
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).with_for_update().first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+        
+    if not is_admin(user) and c.assigned_expert != user.id:
+        raise HTTPException(status_code=403, detail="You are not authorized to unassign this case.")
+        
+    if c.assigned_expert is None:
+        raise HTTPException(status_code=400, detail="This case is not currently assigned.")
+        
+    old_expert_id = c.assigned_expert
+    c.assigned_expert = None
+    c.status = StatusEnum.CASE_FILED
+    db.commit()
+    
+    log_audit_event(db, c.id, user.id, "Case Unassigned", f"Case {c.case_number} unassigned by {user.full_name}.")
+    if c.created_by:
+        add_user_notification(
+            db, c.created_by, "Case Unassigned",
+            f"Case {c.case_number} has been unassigned and returned to available cases pool."
+        )
+        
+    return {
+        "message": "Case unassigned successfully",
+        "status": c.status.value,
+        "assigned_expert_id": None
     }
 
 @router.get("/cases/{case_id}")
@@ -724,6 +764,7 @@ def get_case_detail(
         "created_at": c.created_at.isoformat() if c.created_at else None,
         "submitted_at": c.submitted_at.isoformat() if c.submitted_at else None,
         "opened_at": c.opened_at.isoformat() if c.opened_at else None,
+        "assigned_expert": c.expert.full_name if c.expert else None,
         "assigned_expert_id": c.assigned_expert,
         "assigned_expert_name": c.expert.full_name if c.expert else None,
         "created_by": c.created_by,
@@ -1185,6 +1226,17 @@ def run_ai_analysis(
 
     if e.case_id:
         log_audit_event(db, e.case_id, user.id, "AI Scan Completed", f"AI scan completed on '{e.original_name}': Result {result.value} ({round(confidence * 100, 1)}%).")
+        
+        # Automatically generate AI Report for the case upon scan completion
+        rep_file = f"/reports/ai-report-{e.case.case_number.lower()}-{uuid.uuid4().hex[:6]}.pdf"
+        ai_report = Report(
+            case_id=e.case_id,
+            generated_by=user.id,
+            report_type=ReportTypeEnum.AI,
+            report_file=rep_file
+        )
+        db.add(ai_report)
+        db.commit()
     
     # Seed a simulated Forensic Review for deepfake or suspicious results (25% chance)
     if result in [AIResultEnum.DEEPFAKE, AIResultEnum.SUSPICIOUS] and random.random() < 0.5:
@@ -1506,3 +1558,147 @@ def mark_notification_read(
     n.read = True
     db.commit()
     return {"message": "Notification marked as read"}
+
+class MessageCreate(BaseModel):
+    message: str
+
+@router.get("/cases/{case_id}/messages")
+def get_case_messages(
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    # Verify participant authorization:
+    # Must be Admin OR case creator OR assigned investigator
+    if not is_admin(user) and user.id != c.created_by and user.id != c.assigned_expert:
+        raise HTTPException(
+            status_code=403,
+            detail="Access Denied: You are not authorized to view messages for this case."
+        )
+
+    if c.assigned_expert is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Messaging is unavailable because no investigator is assigned."
+        )
+
+    # Mark unread incoming messages from the other user as read
+    unread_msgs = db.query(CaseMessage).filter(
+        CaseMessage.case_id == case_id,
+        CaseMessage.sender_id != user.id,
+        CaseMessage.read_at == None
+    ).all()
+    if unread_msgs:
+        now = datetime.now(timezone.utc)
+        for m in unread_msgs:
+            m.read_at = now
+        db.commit()
+
+    # Get all case messages ordered chronologically
+    messages = db.query(CaseMessage).filter(
+        CaseMessage.case_id == case_id
+    ).order_by(CaseMessage.created_at.asc()).all()
+
+    msg_list = []
+    for m in messages:
+        sender_name = m.sender.full_name if m.sender else "System"
+        is_inv = (m.sender_id == c.assigned_expert)
+        role_label = "Lead Investigator" if is_inv else "Case Owner"
+        
+        msg_list.append({
+            "id": m.id,
+            "case_id": m.case_id,
+            "sender_id": m.sender_id,
+            "sender_name": sender_name,
+            "sender_role": role_label,
+            "is_me": m.sender_id == user.id,
+            "message": m.message,
+            "created_at": m.created_at.isoformat() if m.created_at else None,
+            "read_at": m.read_at.isoformat() if m.read_at else None
+        })
+
+    return {
+        "case_id": c.id,
+        "case_number": c.case_number,
+        "assigned_expert_name": c.expert.full_name if c.expert else "Unassigned",
+        "creator_name": c.creator.full_name if c.creator else "Reporter",
+        "messages": msg_list
+    }
+
+@router.post("/cases/{case_id}/messages")
+def send_case_message(
+    case_id: int,
+    payload: MessageCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    msg_text = payload.message.strip() if payload.message else ""
+    if not msg_text:
+        raise HTTPException(status_code=400, detail="Message content cannot be empty")
+
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    # Strict participant check
+    if not is_admin(user) and user.id != c.created_by and user.id != c.assigned_expert:
+        raise HTTPException(
+            status_code=403,
+            detail="Access Denied: You are not authorized to send messages for this case."
+        )
+
+    if c.assigned_expert is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Messaging is unavailable because an investigator has not been assigned."
+        )
+
+    now = datetime.now(timezone.utc)
+    new_msg = CaseMessage(
+        case_id=c.id,
+        sender_id=user.id,
+        message=msg_text,
+        created_at=now
+    )
+    db.add(new_msg)
+    db.commit()
+    db.refresh(new_msg)
+
+    # Notify recipient
+    recipient_id = c.assigned_expert if user.id == c.created_by else c.created_by
+    if recipient_id and recipient_id != user.id:
+        snippet = msg_text if len(msg_text) <= 50 else msg_text[:50] + "..."
+        add_user_notification(
+            db,
+            recipient_id,
+            f"New Message on Case {c.case_number}",
+            f"{user.full_name}: {snippet}"
+        )
+
+    # Log audit event
+    log_audit_event(
+        db,
+        c.id,
+        user.id,
+        "Message Sent",
+        f"Message sent by {user.full_name} for case {c.case_number}."
+    )
+
+    is_inv = (user.id == c.assigned_expert)
+    role_label = "Lead Investigator" if is_inv else "Case Owner"
+
+    return {
+        "id": new_msg.id,
+        "case_id": new_msg.case_id,
+        "sender_id": new_msg.sender_id,
+        "sender_name": user.full_name,
+        "sender_role": role_label,
+        "is_me": True,
+        "message": new_msg.message,
+        "created_at": new_msg.created_at.isoformat() if new_msg.created_at else None,
+        "read_at": None
+    }
