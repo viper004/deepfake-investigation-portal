@@ -465,12 +465,24 @@ def create_case(
     case_num = f"CASE-{datetime.now().strftime('%y%m%d%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
     
     inc_date = None
-    if incident_date:
+    if incident_date and incident_date.strip():
         try:
-            inc_date = datetime.fromisoformat(incident_date)
-        except:
-            pass
+            date_part = incident_date.strip().split("T")[0]
+            inc_date_obj = datetime.strptime(date_part, "%Y-%m-%d").date()
             
+            server_today_utc = datetime.now(timezone.utc).date()
+            server_today_local = datetime.now().date()
+            current_date = max(server_today_utc, server_today_local)
+            
+            if inc_date_obj > current_date:
+                raise HTTPException(status_code=400, detail="Incident date cannot be in the future.")
+            
+            inc_date = datetime.combine(inc_date_obj, datetime.min.time())
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
     new_case = InvestigationCase(
         case_number=case_num,
         title=title,
@@ -810,10 +822,22 @@ def update_case(
     except:
         pass
         
-    if incident_date:
+    if incident_date and incident_date.strip():
         try:
-            c.incident_date = datetime.fromisoformat(incident_date)
-        except:
+            date_part = incident_date.strip().split("T")[0]
+            inc_date_obj = datetime.strptime(date_part, "%Y-%m-%d").date()
+            
+            server_today_utc = datetime.now(timezone.utc).date()
+            server_today_local = datetime.now().date()
+            current_date = max(server_today_utc, server_today_local)
+            
+            if inc_date_obj > current_date:
+                raise HTTPException(status_code=400, detail="Incident date cannot be in the future.")
+            
+            c.incident_date = datetime.combine(inc_date_obj, datetime.min.time())
+        except HTTPException:
+            raise
+        except Exception:
             pass
             
     db.commit()
@@ -1562,6 +1586,13 @@ def mark_notification_read(
 class MessageCreate(BaseModel):
     message: str
 
+def format_datetime_utc(dt: Optional[datetime]) -> Optional[str]:
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
+
 @router.get("/cases/{case_id}/messages")
 def get_case_messages(
     case_id: int,
@@ -1617,8 +1648,8 @@ def get_case_messages(
             "sender_role": role_label,
             "is_me": m.sender_id == user.id,
             "message": m.message,
-            "created_at": m.created_at.isoformat() if m.created_at else None,
-            "read_at": m.read_at.isoformat() if m.read_at else None
+            "created_at": format_datetime_utc(m.created_at),
+            "read_at": format_datetime_utc(m.read_at)
         })
 
     return {
@@ -1699,6 +1730,6 @@ def send_case_message(
         "sender_role": role_label,
         "is_me": True,
         "message": new_msg.message,
-        "created_at": new_msg.created_at.isoformat() if new_msg.created_at else None,
+        "created_at": format_datetime_utc(new_msg.created_at),
         "read_at": None
     }
