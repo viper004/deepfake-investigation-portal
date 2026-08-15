@@ -358,6 +358,10 @@ export default function InvestigatorCaseWorkspacePage() {
       const res = await fetch(`${BACKEND_URL}/api/v1/user/cases/${caseId}/report/pdf`, {
         headers: { Authorization: `Bearer ${session.accessToken}` }
       });
+      if (res.status === 401) {
+        showToast("Your session has expired. Please sign in again.", "error");
+        return;
+      }
       if (res.ok) {
         const blob = await res.blob();
         const url = window.URL.createObjectURL(blob);
@@ -378,9 +382,34 @@ export default function InvestigatorCaseWorkspacePage() {
     }
   };
 
-  const handleViewPDF = () => {
-    if (!caseId) return;
-    window.open(`${BACKEND_URL}/api/v1/user/cases/${caseId}/report/pdf`, "_blank");
+  const handleViewPDF = async () => {
+    if (!caseId || !session?.accessToken) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/cases/${caseId}/report/pdf`, {
+        headers: { Authorization: `Bearer ${session.accessToken}` }
+      });
+
+      if (res.status === 401) {
+        showToast("Your session has expired. Please sign in again.", "error");
+        return;
+      }
+
+      if (!res.ok) {
+        showToast("Unable to open the forensic report. Please try again.", "error");
+        return;
+      }
+
+      const blob = await res.blob();
+      const pdfUrl = URL.createObjectURL(blob);
+      window.open(pdfUrl, "_blank", "noopener,noreferrer");
+
+      setTimeout(() => {
+        URL.revokeObjectURL(pdfUrl);
+      }, 60000);
+    } catch (err) {
+      console.error("Error viewing PDF report:", err);
+      showToast("Unable to open the forensic report. Please try again.", "error");
+    }
   };
 
   const handleForwardToExpert = () => {

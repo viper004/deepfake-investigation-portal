@@ -121,7 +121,7 @@ export default function InvestigatorNotesEditor({
   const [isMounted, setIsMounted] = useState<boolean>(false);
   const [, forceUpdate] = useState<number>(0);
 
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
 
   // Permission Checks
   const assignedIdStr = assignedExpertId !== undefined && assignedExpertId !== null ? String(assignedExpertId) : "";

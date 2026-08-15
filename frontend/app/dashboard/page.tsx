@@ -869,6 +869,10 @@ function UserDashboardContent() {
       const res = await fetch(`${BACKEND_URL}/api/v1/user/cases/${selectedCaseId}/report/pdf`, {
         headers: { "Authorization": `Bearer ${session.accessToken}` }
       });
+      if (res.status === 401) {
+        showToast("Your session has expired. Please sign in again.", "error");
+        return;
+      }
       if (res.ok) {
         const blob = await res.blob();
         const url = window.URL.createObjectURL(blob);
@@ -889,9 +893,34 @@ function UserDashboardContent() {
     }
   };
 
-  const handleViewPDF = () => {
-    if (!selectedCaseId) return;
-    window.open(`${BACKEND_URL}/api/v1/user/cases/${selectedCaseId}/report/pdf`, "_blank");
+  const handleViewPDF = async () => {
+    if (!selectedCaseId || !session?.accessToken) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/cases/${selectedCaseId}/report/pdf`, {
+        headers: { Authorization: `Bearer ${session.accessToken}` }
+      });
+
+      if (res.status === 401) {
+        showToast("Your session has expired. Please sign in again.", "error");
+        return;
+      }
+
+      if (!res.ok) {
+        showToast("Unable to open the forensic report. Please try again.", "error");
+        return;
+      }
+
+      const blob = await res.blob();
+      const pdfUrl = URL.createObjectURL(blob);
+      window.open(pdfUrl, "_blank", "noopener,noreferrer");
+
+      setTimeout(() => {
+        URL.revokeObjectURL(pdfUrl);
+      }, 60000);
+    } catch (err) {
+      console.error("Error viewing PDF report:", err);
+      showToast("Unable to open the forensic report. Please try again.", "error");
+    }
   };
 
   const handleForwardToExpert = () => {
@@ -2179,22 +2208,21 @@ function UserDashboardContent() {
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse text-sm">
+                    <table className="w-full text-left border-collapse text-sm min-w-[720px]">
                       <thead>
                         <tr className="bg-slate-50 border-b border-[#e5e5e5] text-xs font-bold text-[#0a0a0a]/60 uppercase">
-                          <th className="px-6 py-4">Case Code</th>
-                          <th className="px-6 py-4">Title</th>
-                          <th className="px-6 py-4">Status</th>
+                          <th className="px-6 py-4 w-44 whitespace-nowrap">Case Code</th>
+                          <th className="px-6 py-4 min-w-[200px]">Title</th>
+                          <th className="px-6 py-4 w-48 whitespace-nowrap">Status</th>
                           {isInvestigator ? (
                             <>
-                              <th className="px-6 py-4">AI Progress</th>
-                              <th className="px-6 py-4">Last Updated</th>
-                              <th className="px-6 py-4 text-center">Action</th>
+                              <th className="px-6 py-4 w-36 whitespace-nowrap">Last Updated</th>
+                              <th className="px-6 py-4 text-right min-w-[170px] w-48 whitespace-nowrap">Action</th>
                             </>
                           ) : (
                             <>
-                              <th className="px-6 py-4">Incident Date</th>
-                              <th className="px-6 py-4">Created On</th>
+                              <th className="px-6 py-4 w-36 whitespace-nowrap">Incident Date</th>
+                              <th className="px-6 py-4 w-36 whitespace-nowrap">Created On</th>
                             </>
                           )}
                         </tr>
@@ -2202,7 +2230,7 @@ function UserDashboardContent() {
                       <tbody className="divide-y divide-[#e5e5e5] text-sm">
                         {cases.map((c: any) => (
                           <tr key={c.id} className="hover:bg-slate-50/50">
-                            <td className="px-6 py-4 font-bold">
+                            <td className="px-6 py-4 font-bold whitespace-nowrap">
                               <button
                                 type="button"
                                 onClick={() => viewCaseDetails(c.id)}
@@ -2212,24 +2240,19 @@ function UserDashboardContent() {
                               </button>
                             </td>
                             <td className="px-6 py-4">
-                              <p className="font-semibold text-[#0a0a0a]">{c.title}</p>
-                              <p className="text-xs text-[#0a0a0a]/50 truncate max-w-[240px]">{c.description}</p>
+                              <p className="font-semibold text-[#0a0a0a] line-clamp-1">{c.title}</p>
+                              <p className="text-xs text-[#0a0a0a]/50 truncate max-w-[280px]">{c.description}</p>
                             </td>
-                            <td className="px-6 py-4">{renderStatusBadge(c.status)}</td>
+                            <td className="px-6 py-4 whitespace-nowrap">{renderStatusBadge(c.status)}</td>
                             {isInvestigator ? (
                               <>
-                                <td className="px-6 py-4">
-                                  <span className="text-xs font-semibold text-sky-700 bg-sky-50 border border-sky-200 px-2.5 py-1 rounded inline-block">
-                                    {c.ai_progress || `${c.evidence_count || 0} file(s)`}
-                                  </span>
-                                </td>
-                                <td className="px-6 py-4 text-xs text-[#0a0a0a]/60">
+                                <td className="px-6 py-4 text-xs text-[#0a0a0a]/60 whitespace-nowrap">
                                   {formatDate(c.updated_at || c.created_at)}
                                 </td>
-                                <td className="px-6 py-4 text-center">
+                                <td className="px-6 py-4 text-right whitespace-nowrap min-w-[170px]">
                                   <button
                                     onClick={() => viewCaseDetails(c.id)}
-                                    className="px-3 py-1.5 bg-[#CC2200] hover:bg-[#a81c00] text-white text-xs font-bold rounded transition-colors"
+                                    className="px-4 py-2 bg-[#CC2200] hover:bg-[#a81c00] text-white text-xs font-semibold rounded shadow-sm transition-colors whitespace-nowrap cursor-pointer"
                                   >
                                     View Investigation
                                   </button>
@@ -2237,10 +2260,10 @@ function UserDashboardContent() {
                               </>
                             ) : (
                               <>
-                                <td className="px-6 py-4 text-xs text-[#0a0a0a]/60">
+                                <td className="px-6 py-4 text-xs text-[#0a0a0a]/60 whitespace-nowrap">
                                   {formatDate(c.incident_date)}
                                 </td>
-                                <td className="px-6 py-4 text-xs text-[#0a0a0a]/60">
+                                <td className="px-6 py-4 text-xs text-[#0a0a0a]/60 whitespace-nowrap">
                                   {formatDate(c.created_at)}
                                 </td>
                               </>
