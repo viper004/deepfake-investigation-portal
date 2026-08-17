@@ -1652,28 +1652,41 @@ function UserDashboardContent() {
     const map: { [key: string]: string } = {
       DRAFT: "bg-slate-100 text-slate-700 border-slate-300",
       CASE_FILED: "bg-amber-50 text-amber-800 border-amber-300",
-      CASE_UNDER_INVESTIGATION: "bg-blue-50 text-blue-800 border-blue-300",
+      CASE_UNDER_INVESTIGATION: "bg-purple-50 text-purple-800 border-purple-300",
       CLOSED: "bg-emerald-50 text-emerald-800 border-emerald-300",
-      CASE_OPENED: "bg-blue-50 text-blue-800 border-blue-300",
-      UNDER_ANALYSIS: "bg-blue-50 text-blue-800 border-blue-300",
-      EXPERT_REVIEW: "bg-blue-50 text-blue-800 border-blue-300",
+      CASE_OPENED: "bg-purple-50 text-purple-800 border-purple-300",
+      UNDER_ANALYSIS: "bg-purple-50 text-purple-800 border-purple-300",
+      EXPERT_REVIEW: "bg-purple-50 text-purple-800 border-purple-300",
       OPEN: "bg-amber-50 text-amber-800 border-amber-300",
-      REVIEW: "bg-blue-50 text-blue-800 border-blue-300"
+      REVIEW: "bg-purple-50 text-purple-800 border-purple-300",
+      RESOLVED: "bg-emerald-50 text-emerald-800 border-emerald-300",
+      CASE_RESOLVED: "bg-emerald-50 text-emerald-800 border-emerald-300",
+      PENDING: "bg-amber-50 text-amber-800 border-amber-300"
     };
     const labels: { [key: string]: string } = {
       DRAFT: "Draft",
       CASE_FILED: "Case Filed",
-      CASE_UNDER_INVESTIGATION: "Case Under Investigation",
+      CASE_UNDER_INVESTIGATION: "Under Investigation",
       CLOSED: "Closed",
-      CASE_OPENED: "Case Under Investigation",
-      UNDER_ANALYSIS: "Case Under Investigation",
-      EXPERT_REVIEW: "Case Under Investigation",
+      CASE_OPENED: "Under Investigation",
+      UNDER_ANALYSIS: "Under Investigation",
+      EXPERT_REVIEW: "Under Investigation",
       OPEN: "Case Filed",
-      REVIEW: "Case Under Investigation"
+      REVIEW: "Under Investigation",
+      RESOLVED: "Resolved",
+      CASE_RESOLVED: "Resolved",
+      PENDING: "Pending"
     };
+    const normalizedKey = (status || "").toUpperCase().replace(/\s+/g, "_");
+    let displayLabel = labels[normalizedKey];
+    if (!displayLabel) {
+      displayLabel = (status || "").replace(/^Case\s+/i, "").replace(/_/g, " ");
+      displayLabel = displayLabel.replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+
     return (
-      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold border ${map[status] || "bg-slate-50 text-slate-700 border-slate-200"}`}>
-        {labels[status] || status.replace("_", " ")}
+      <span className={`inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-bold border whitespace-nowrap ${map[normalizedKey] || "bg-purple-50 text-purple-800 border-purple-300"}`}>
+        {displayLabel}
       </span>
     );
   };
