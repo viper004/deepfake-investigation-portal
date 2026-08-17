@@ -159,38 +159,67 @@ export default function InvestigatorCaseWorkspacePage() {
   };
 
   const renderStatusBadge = (statusStr: string) => {
-    switch (statusStr) {
-      case "DRAFT":
-        return (
-          <span className="px-2.5 py-1 rounded text-xs font-bold bg-amber-50 text-amber-800 border border-amber-200">
-            Draft
-          </span>
-        );
-      case "CASE_FILED":
-        return (
-          <span className="px-2.5 py-1 rounded text-xs font-bold bg-blue-50 text-blue-800 border border-blue-200">
-            Case Filed
-          </span>
-        );
-      case "CASE_UNDER_INVESTIGATION":
-        return (
-          <span className="px-2.5 py-1 rounded text-xs font-bold bg-purple-50 text-purple-800 border border-purple-200">
-            Case Under Investigation
-          </span>
-        );
-      case "CLOSED":
-        return (
-          <span className="px-2.5 py-1 rounded text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-            Closed
-          </span>
-        );
-      default:
-        return (
-          <span className="px-2.5 py-1 rounded text-xs font-bold bg-slate-100 text-slate-700 border border-slate-300">
-            {statusStr}
-          </span>
-        );
+    const raw = statusStr || "";
+    const normalized = raw.toUpperCase().replace(/\s+/g, "_");
+
+    if (normalized === "DRAFT") {
+      return (
+        <span className="inline-flex items-center justify-center px-2.5 py-1 rounded text-xs font-bold bg-amber-50 text-amber-800 border border-amber-200 whitespace-nowrap">
+          Draft
+        </span>
+      );
     }
+    if (normalized === "CASE_FILED" || normalized === "FILED") {
+      return (
+        <span className="inline-flex items-center justify-center px-2.5 py-1 rounded text-xs font-bold bg-blue-50 text-blue-800 border border-blue-200 whitespace-nowrap">
+          Case Filed
+        </span>
+      );
+    }
+    if (
+      normalized === "CASE_UNDER_INVESTIGATION" ||
+      normalized === "UNDER_INVESTIGATION" ||
+      normalized === "CASE_OPENED" ||
+      normalized === "UNDER_ANALYSIS" ||
+      normalized === "EXPERT_REVIEW" ||
+      normalized === "REVIEW"
+    ) {
+      return (
+        <span className="inline-flex items-center justify-center px-2.5 py-1 rounded text-xs font-bold bg-purple-50 text-purple-800 border border-purple-200 whitespace-nowrap">
+          Under Investigation
+        </span>
+      );
+    }
+    if (normalized === "CLOSED" || normalized === "CASE_CLOSED") {
+      return (
+        <span className="inline-flex items-center justify-center px-2.5 py-1 rounded text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 whitespace-nowrap">
+          Closed
+        </span>
+      );
+    }
+    if (normalized === "RESOLVED" || normalized === "CASE_RESOLVED") {
+      return (
+        <span className="inline-flex items-center justify-center px-2.5 py-1 rounded text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 whitespace-nowrap">
+          Resolved
+        </span>
+      );
+    }
+    if (normalized === "PENDING" || normalized === "CASE_PENDING") {
+      return (
+        <span className="inline-flex items-center justify-center px-2.5 py-1 rounded text-xs font-bold bg-amber-50 text-amber-800 border border-amber-200 whitespace-nowrap">
+          Pending
+        </span>
+      );
+    }
+
+    let displayLabel = raw.replace(/^Case\s+/i, "").replace(/_/g, " ");
+    displayLabel = displayLabel.replace(/\b\w/g, (c) => c.toUpperCase());
+
+    return (
+      <span className="inline-flex items-center justify-center px-2.5 py-1 rounded text-xs font-bold bg-purple-50 text-purple-800 border border-purple-200 whitespace-nowrap">
+        {displayLabel}
+      </span>
+    );
   };
 
   // Fetch Existing AI Scan
