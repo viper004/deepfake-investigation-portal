@@ -267,6 +267,62 @@ function UserDashboardContent() {
   const [isOpenConfirmModalOpen, setIsOpenConfirmModalOpen] = useState(false);
   const [isClaimConfirmModalOpen, setIsClaimConfirmModalOpen] = useState(false);
   const [isAlreadyClaimedModalOpen, setIsAlreadyClaimedModalOpen] = useState(false);
+  const [viewCaseModalOpen, setViewCaseModalOpen] = useState(false);
+  const [caseToPreview, setCaseToPreview] = useState<any | null>(null);
+  const [claimingCaseId, setClaimingCaseId] = useState<number | null>(null);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && viewCaseModalOpen && claimingCaseId === null) {
+        setViewCaseModalOpen(false);
+        setCaseToPreview(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [viewCaseModalOpen, claimingCaseId]);
+
+  const handleOpenViewCaseModal = (c: any) => {
+    setCaseToPreview(c);
+    setViewCaseModalOpen(true);
+  };
+
+  const handleClaimFromModal = async () => {
+    if (!caseToPreview || !session?.accessToken || claimingCaseId !== null) return;
+    const targetId = caseToPreview.id;
+    setClaimingCaseId(targetId);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/cases/${targetId}/open`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${session.accessToken}` }
+      });
+
+      if (res.ok) {
+        showToast("Investigation claimed and assigned to your workload!", "success");
+        setViewCaseModalOpen(false);
+        setCaseToPreview(null);
+        fetchOpenCases();
+        fetchCases();
+        fetchStats();
+        window.open(`/dashboard/cases/${targetId}`, "_blank", "noopener,noreferrer");
+      } else {
+        const data = await res.json();
+        const detailStr = typeof data.detail === "string" ? data.detail : (data.detail?.message || JSON.stringify(data.detail));
+        if (res.status === 400 && detailStr.includes("LIMIT_REACHED")) {
+          setIsLimitModalOpen(true);
+        } else if (res.status === 409 || detailStr.includes("already been assigned")) {
+          showToast("This case has already been assigned to another investigator.", "error");
+          fetchOpenCases();
+        } else {
+          showToast(detailStr || "Failed to claim case", "error");
+        }
+      }
+    } catch (err) {
+      showToast("Error claiming case", "error");
+    } finally {
+      setClaimingCaseId(null);
+    }
+  };
   const [forensicModalOpen, setForensicModalOpen] = useState(false);
   const [selectedAnalysisIdForReview, setSelectedAnalysisIdForReview] = useState<number | null>(null);
   const [forensicForm, setForensicForm] = useState({ decision: "APPROVED", observations: "" });
@@ -2968,11 +3024,11 @@ function UserDashboardContent() {
                             </td>
                             <td className="py-3.5 px-4 text-center">
                               <button
-                                onClick={() => claimAndOpenCase(c.id)}
+                                onClick={() => handleOpenViewCaseModal(c)}
                                 className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded bg-slate-800 hover:bg-[#CC2200] text-white text-xs font-bold transition-colors shadow-xs cursor-pointer"
                               >
-                                <ShieldCheck className="h-3.5 w-3.5" />
-                                Claim & View Case
+                                <Eye className="h-3.5 w-3.5" />
+                                View Case
                               </button>
                             </td>
                           </tr>
@@ -4111,6 +4167,175 @@ function UserDashboardContent() {
               >
                 {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
                 Confirm Submission
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ──────────────── VIEW CASE DETAILS MODAL ──────────────── */}
+      {viewCaseModalOpen && caseToPreview && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in text-left"
+          onClick={() => {
+            if (claimingCaseId === null) {
+              setViewCaseModalOpen(false);
+              setCaseToPreview(null);
+            }
+          }}
+        >
+          <div
+            className="bg-white rounded-xl max-w-xl w-full p-6 shadow-2xl border border-[#e5e5e5] space-y-5 animate-scale-up max-h-[90vh] flex flex-col relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-4 border-b border-[#e5e5e5]">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-[#CC2200]/10 rounded-lg">
+                  <Eye className="h-5 w-5 text-[#CC2200]" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-lg text-[#0a0a0a]">Case Details</h3>
+                  {caseToPreview.case_number && (
+                    <p className="text-xs font-mono font-bold text-[#CC2200]">
+                      Case #{caseToPreview.case_number}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (claimingCaseId === null) {
+                    setViewCaseModalOpen(false);
+                    setCaseToPreview(null);
+                  }
+                }}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                aria-label="Close modal"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Scrollable Content */}
+            <div className="space-y-4 overflow-y-auto pr-1 flex-1 text-sm text-[#0a0a0a]">
+              {/* Title */}
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/50 mb-1">
+                  Title
+                </label>
+                <p className="font-bold text-[#0a0a0a] text-base leading-snug">
+                  {caseToPreview.title || "Untitled Case"}
+                </p>
+              </div>
+
+              {/* Description */}
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/50 mb-1">
+                  Description
+                </label>
+                <div className="bg-slate-50 p-3.5 rounded-lg border border-[#e5e5e5] text-xs text-[#0a0a0a]/80 whitespace-pre-wrap leading-relaxed">
+                  {caseToPreview.description || "No description provided."}
+                </div>
+              </div>
+
+              {/* Dates Grid: Date of Issue & Date of Incident */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/50 mb-1">
+                    Date of Issue
+                  </label>
+                  <p className="font-semibold text-xs text-[#0a0a0a]/90">
+                    {caseToPreview.submitted_at
+                      ? new Date(caseToPreview.submitted_at).toLocaleDateString("en-GB")
+                      : caseToPreview.created_at
+                      ? new Date(caseToPreview.created_at).toLocaleDateString("en-GB")
+                      : "N/A"}
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/50 mb-1">
+                    Date of Incident
+                  </label>
+                  <p className="font-semibold text-xs text-[#0a0a0a]/90">
+                    {caseToPreview.incident_date
+                      ? new Date(caseToPreview.incident_date).toLocaleDateString("en-GB")
+                      : "N/A"}
+                  </p>
+                </div>
+              </div>
+
+              {/* Grid: Case User & Evidences Uploaded */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/50 mb-1">
+                    Case User
+                  </label>
+                  <p className="font-semibold text-xs text-[#0a0a0a]/90">
+                    {caseToPreview.creator_name || "Anonymous Reporter"}
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/50 mb-1">
+                    Evidences Uploaded
+                  </label>
+                  <p className="font-semibold text-xs text-[#0a0a0a]/90">
+                    {caseToPreview.evidence_count !== undefined
+                      ? `${caseToPreview.evidence_count} ${caseToPreview.evidence_count === 1 ? "evidence file" : "evidence files"}`
+                      : (caseToPreview.evidence?.length !== undefined
+                        ? `${caseToPreview.evidence.length} ${caseToPreview.evidence.length === 1 ? "evidence file" : "evidence files"}`
+                        : "0 evidence files")}
+                  </p>
+                </div>
+              </div>
+
+              {/* Case Notes */}
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/50 mb-1">
+                  Case Notes
+                </label>
+                <div className="bg-slate-50 p-3.5 rounded-lg border border-[#e5e5e5] text-xs text-[#0a0a0a]/80 max-h-40 overflow-y-auto space-y-2">
+                  {Array.isArray(caseToPreview.notes) && caseToPreview.notes.length > 0 ? (
+                    caseToPreview.notes.map((n: any, idx: number) => (
+                      <div key={n.id || idx} className="border-b border-[#e5e5e5] last:border-b-0 pb-1.5 last:pb-0">
+                        <p className="whitespace-pre-wrap">{n.note || n}</p>
+                      </div>
+                    ))
+                  ) : typeof caseToPreview.notes === "string" && caseToPreview.notes.trim() ? (
+                    <p className="whitespace-pre-wrap">{caseToPreview.notes}</p>
+                  ) : (
+                    <p className="italic text-[#0a0a0a]/40">No case notes provided.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-end gap-3 pt-4 border-t border-[#e5e5e5]">
+              <button
+                type="button"
+                onClick={() => {
+                  setViewCaseModalOpen(false);
+                  setCaseToPreview(null);
+                }}
+                disabled={claimingCaseId !== null}
+                className="px-4 py-2 border border-[#e5e5e5] rounded-md text-xs font-bold text-[#0a0a0a]/70 hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleClaimFromModal}
+                disabled={claimingCaseId !== null}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#CC2200] hover:bg-[#a81c00] text-white rounded-md text-xs font-bold transition-colors shadow-xs cursor-pointer disabled:opacity-50"
+              >
+                {claimingCaseId !== null ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                )}
+                {claimingCaseId !== null ? "Claiming..." : "Claim Case"}
               </button>
             </div>
           </div>

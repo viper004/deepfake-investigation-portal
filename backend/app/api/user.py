@@ -442,6 +442,16 @@ def get_open_cases(
     cases_list = []
     for c in cases:
         total_ev = len(c.evidence_files) if c.evidence_files else 0
+        notes_list = []
+        if c.notes:
+            for n in sorted(c.notes, key=lambda x: x.created_at):
+                notes_list.append({
+                    "id": n.id,
+                    "note": n.note,
+                    "user_id": n.user_id,
+                    "user_name": n.user.full_name if n.user else "User",
+                    "created_at": n.created_at.isoformat() if n.created_at else None
+                })
         cases_list.append({
             "id": c.id,
             "case_number": c.case_number,
@@ -454,7 +464,8 @@ def get_open_cases(
             "updated_at": c.updated_at.isoformat() if c.updated_at else (c.created_at.isoformat() if c.created_at else None),
             "created_by": c.created_by,
             "creator_name": c.creator.full_name if c.creator else "Anonymous Reporter",
-            "evidence_count": total_ev
+            "evidence_count": total_ev,
+            "notes": notes_list
         })
         
     return {
