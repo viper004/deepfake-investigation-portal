@@ -15,7 +15,7 @@ from app.database.database import SessionLocal
 from app.schemas.user import UserCreate, UserResponse, UserLogin
 from app.services.user import get_user_by_email, create_user
 from app.utils.auth import verify_password, create_access_token, get_password_hash
-from app.models.user import User, InvestigatorProfile, InvestigatorInvitation, EmailVerification
+from app.models.user import User, InvestigatorProfile, InvestigatorInvitation, EmailVerification, PasswordResetOTP
 from app.services.email_service import send_otp_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -168,6 +168,220 @@ def verify_email_otp(data: VerifyOTPRequestSchema, db: Session = Depends(get_db)
 @router.post("/resend-email-otp")
 async def resend_email_otp(data: OTPRequestSchema, db: Session = Depends(get_db)):
     return await send_email_otp(data, db)
+
+# ──────────────── FORGOT PASSWORD ENDPOINTS ────────────────
+
+class ForgotPasswordRequestSchema(BaseModel):
+    email: str
+
+class VerifyResetOTPRequestSchema(BaseModel):
+    email: str
+    otp: str
+
+class ResetPasswordSchema(BaseModel):
+    email: str
+    reset_token: str
+    new_password: str
+    confirm_password: str
+
+@router.post("/forgot-password/request")
+async def forgot_password_request(data: ForgotPasswordRequestSchema, db: Session = Depends(get_db)):
+    email = data.email.strip().lower()
+    
+    # 1. Validate email format
+    email_regex = r"^[\w\.-]+@[\w\.-]+\.\w+$"
+    if not re.match(email_regex, email):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid email address format."
+        )
+    
+    # 2. Check whether account exists in system
+    user = get_user_by_email(db, email)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No registered account found with this email address."
+        )
+    
+    # 3. Cleanup expired OTPs
+    cleanup_expired_otps(db)
+
+    # 4. Check rate limit: Maximum 3 OTP requests per hour for the same email
+    one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+    recent_requests = db.query(PasswordResetOTP).filter(
+        PasswordResetOTP.email == email,
+        PasswordResetOTP.created_at >= one_hour_ago
+    ).count()
+
+    if recent_requests >= 3:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Maximum 3 password reset attempts allowed per hour. Please try again later."
+        )
+
+    # Invalidate previous unused reset records for this email
+    db.query(PasswordResetOTP).filter(
+        PasswordResetOTP.email == email,
+        PasswordResetOTP.used == False
+    ).update({"used": True}, synchronize_session=False)
+    db.commit()
+
+    # 5. Generate cryptographically secure random 6-digit OTP
+    otp_code = f"{secrets.randbelow(900000) + 100000}"
+    otp_hashed = hash_otp(otp_code)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+
+    # 6. Store in database
+    reset_record = PasswordResetOTP(
+        email=email,
+        otp_hash=otp_hashed,
+        expires_at=expires_at,
+        attempt_count=0,
+        verified=False,
+        used=False
+    )
+    db.add(reset_record)
+    db.commit()
+
+    # 7. Send OTP email
+    await send_otp_email(email, otp_code)
+
+    return {"message": "If an account exists with this email address, a verification code has been sent."}
+
+@router.post("/forgot-password/verify-otp")
+def forgot_password_verify_otp(data: VerifyResetOTPRequestSchema, db: Session = Depends(get_db)):
+    email = data.email.strip().lower()
+    otp_code = data.otp.strip()
+
+    if not otp_code or len(otp_code) != 6 or not otp_code.isdigit():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OTP must be a 6-digit number."
+        )
+
+    cleanup_expired_otps(db)
+
+    record = db.query(PasswordResetOTP).filter(
+        PasswordResetOTP.email == email,
+        PasswordResetOTP.verified == False,
+        PasswordResetOTP.used == False
+    ).order_by(PasswordResetOTP.id.desc()).first()
+
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Verification code has expired or is invalid."
+        )
+
+    now = datetime.now(timezone.utc)
+    record_expires = record.expires_at.replace(tzinfo=timezone.utc) if record.expires_at.tzinfo is None else record.expires_at
+    if record_expires < now:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Verification code has expired. Please request a new code."
+        )
+
+    if record.attempt_count >= 5:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Maximum verification attempts exceeded. Please request a new verification code."
+        )
+
+    # Increment attempt count
+    record.attempt_count += 1
+    db.commit()
+
+    # Verify OTP hash
+    if hash_otp(otp_code) == record.otp_hash:
+        reset_token = secrets.token_urlsafe(32)
+        record.verified = True
+        record.reset_token = reset_token
+        record.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        return {
+            "message": "OTP verified successfully.",
+            "reset_token": reset_token
+        }
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid verification code. Please check and try again."
+        )
+
+@router.post("/forgot-password/resend-otp")
+async def forgot_password_resend_otp(data: ForgotPasswordRequestSchema, db: Session = Depends(get_db)):
+    return await forgot_password_request(data, db)
+
+@router.post("/forgot-password/reset-password")
+def forgot_password_reset(data: ResetPasswordSchema, db: Session = Depends(get_db)):
+    email = data.email.strip().lower()
+    reset_token = data.reset_token.strip()
+
+    if data.new_password != data.confirm_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Passwords do not match."
+        )
+
+    new_pass = data.new_password
+    if (
+        len(new_pass) < 8 or
+        not re.search(r"[A-Z]", new_pass) or
+        not re.search(r"[a-z]", new_pass) or
+        not re.search(r"[0-9]", new_pass)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, and one number."
+        )
+
+    # Validate reset session record
+    record = db.query(PasswordResetOTP).filter(
+        PasswordResetOTP.email == email,
+        PasswordResetOTP.reset_token == reset_token,
+        PasswordResetOTP.verified == True,
+        PasswordResetOTP.used == False
+    ).first()
+
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired password reset session. Please request a new OTP."
+        )
+
+    now = datetime.now(timezone.utc)
+    record_expires = record.expires_at.replace(tzinfo=timezone.utc) if record.expires_at.tzinfo is None else record.expires_at
+    if (now - record_expires) > timedelta(minutes=15):
+        record.used = True
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password reset session expired. Please restart the process."
+        )
+
+    user = get_user_by_email(db, email)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User account not found."
+        )
+
+    # Update password using existing bcrypt/argon2/pbkdf2 password hashing
+    user.password = get_password_hash(new_pass)
+    user.updated_at = datetime.now(timezone.utc)
+
+    # Invalidate reset record
+    record.used = True
+
+    # Invalidate all reset records for this email
+    db.query(PasswordResetOTP).filter(
+        PasswordResetOTP.email == email
+    ).update({"used": True}, synchronize_session=False)
+
+    db.commit()
+
+    return {"message": "Your password has been updated successfully."}
 
 @router.post("/register/user", status_code=status.HTTP_201_CREATED)
 def register_user(

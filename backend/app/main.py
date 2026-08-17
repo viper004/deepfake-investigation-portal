@@ -69,6 +69,23 @@ def init_db_updates():
                 INDEX idx_email (email)
             ) ENGINE=InnoDB;
         """))
+        # Create password_reset_otps table if not exists
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS password_reset_otps (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                email VARCHAR(255) NOT NULL,
+                otp_hash VARCHAR(255) NOT NULL,
+                reset_token VARCHAR(255) NULL,
+                expires_at DATETIME NOT NULL,
+                attempt_count INT DEFAULT 0 NOT NULL,
+                verified TINYINT(1) DEFAULT 0 NOT NULL,
+                used TINYINT(1) DEFAULT 0 NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_email (email),
+                INDEX idx_reset_token (reset_token)
+            ) ENGINE=InnoDB;
+        """))
         # Create investigator_notes table if not exists
         db.execute(text("""
             CREATE TABLE IF NOT EXISTS investigator_notes (

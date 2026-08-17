@@ -15,7 +15,9 @@ import {
   FileText, 
   Upload,
   CheckCircle,
-  FileCheck
+  FileCheck,
+  Eye,
+  EyeOff
 } from "lucide-react";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
@@ -58,6 +60,10 @@ export default function RegisterPage() {
   const [otpCountdown, setOtpCountdown] = useState(0); // 300s (5 min)
   const [resendCountdown, setResendCountdown] = useState(0); // 60s
   const [toasts, setToasts] = useState<Array<{ id: number; message: string; type: "success" | "error" }>>([]);
+
+  // Password visibility states
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const showToast = (message: string, type: "success" | "error") => {
     const id = Date.now();
@@ -815,14 +821,22 @@ export default function RegisterPage() {
                             <Lock className="h-5 w-5 text-[#0a0a0a]/40" />
                           </div>
                           <input
-                            type="password"
+                            type={showPassword ? "text" : "password"}
                             name="password"
                             required
                             value={formData.password}
                             onChange={handleChange}
-                            className="block w-full pl-10 bg-[#fafafa] border border-[#e5e5e5] rounded-md py-2.5 text-[#0a0a0a] focus:ring-1 focus:ring-[#CC2200] focus:border-[#CC2200] sm:text-sm transition-colors outline-none"
+                            className="block w-full pl-10 pr-10 bg-[#fafafa] border border-[#e5e5e5] rounded-md py-2.5 text-[#0a0a0a] focus:ring-1 focus:ring-[#CC2200] focus:border-[#CC2200] sm:text-sm transition-colors outline-none"
                             placeholder="••••••••"
                           />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword(!showPassword)}
+                            className="absolute inset-y-0 right-0 pr-3 flex items-center text-[#0a0a0a]/40 hover:text-[#0a0a0a]/70 transition-colors cursor-pointer"
+                            aria-label={showPassword ? "Hide password" : "Show password"}
+                          >
+                            {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                          </button>
                         </div>
                       </div>
 
@@ -836,14 +850,22 @@ export default function RegisterPage() {
                             <Lock className="h-5 w-5 text-[#0a0a0a]/40" />
                           </div>
                           <input
-                            type="password"
+                            type={showConfirmPassword ? "text" : "password"}
                             name="confirm_password"
                             required
                             value={formData.confirm_password}
                             onChange={handleChange}
-                            className="block w-full pl-10 bg-[#fafafa] border border-[#e5e5e5] rounded-md py-2.5 text-[#0a0a0a] focus:ring-1 focus:ring-[#CC2200] focus:border-[#CC2200] sm:text-sm transition-colors outline-none"
+                            className="block w-full pl-10 pr-10 bg-[#fafafa] border border-[#e5e5e5] rounded-md py-2.5 text-[#0a0a0a] focus:ring-1 focus:ring-[#CC2200] focus:border-[#CC2200] sm:text-sm transition-colors outline-none"
                             placeholder="••••••••"
                           />
+                          <button
+                            type="button"
+                            onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                            className="absolute inset-y-0 right-0 pr-3 flex items-center text-[#0a0a0a]/40 hover:text-[#0a0a0a]/70 transition-colors cursor-pointer"
+                            aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                          >
+                            {showConfirmPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                          </button>
                         </div>
                       </div>
                     </>
