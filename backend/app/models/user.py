@@ -143,3 +143,17 @@ class EmailVerification(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+class PasswordResetOTP(Base):
+    __tablename__ = "password_reset_otps"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), index=True, nullable=False)
+    otp_hash = Column(String(255), nullable=False)
+    reset_token = Column(String(255), unique=True, index=True, nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    attempt_count = Column(Integer, default=0, nullable=False)
+    verified = Column(Boolean, default=False, nullable=False)
+    used = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
