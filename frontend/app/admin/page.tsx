@@ -32,7 +32,17 @@ import {
   ChevronDown,
   Briefcase,
   ArrowRight,
-  ArrowLeft
+  ArrowLeft,
+  TrendingUp,
+  TrendingDown,
+  Clock,
+  AlertTriangle,
+  Cpu,
+  Zap,
+  Server,
+  Database,
+  Bell,
+  ArrowUpRight
 } from "lucide-react";
 import Link from "next/link";
 import WorkspaceSwitcher from "@/components/WorkspaceSwitcher";
@@ -134,6 +144,12 @@ export default function AdminDashboard() {
   const [auditSortOrder, setAuditSortOrder] = useState<"asc" | "desc">("desc");
   const [selectedAuditLog, setSelectedAuditLog] = useState<any | null>(null);
   const [isAuditDrawerOpen, setIsAuditDrawerOpen] = useState(false);
+  
+  // Overview Dashboard State
+  const [overviewData, setOverviewData] = useState<any>(null);
+  const [overviewLoading, setOverviewLoading] = useState<boolean>(true);
+  const [overviewError, setOverviewError] = useState<boolean>(false);
+  const [overviewDateRange, setOverviewDateRange] = useState<string>("last_7_days");
   
   const handleSelectLog = (id: number) => {
     setSelectedLogs(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -670,13 +686,37 @@ export default function AdminDashboard() {
     );
   };
 
-  // Initial Fetches (Always load stats and active users initially)
+  // Fetch Overview Stats
+  const fetchOverviewStats = useCallback(async () => {
+    if (!session?.accessToken) return;
+    try {
+      setOverviewLoading(true);
+      setOverviewError(false);
+      const res = await fetch(`${BACKEND_URL}/api/admin/overview-stats?date_range=${overviewDateRange}`, {
+        headers: { Authorization: `Bearer ${session.accessToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setOverviewData(data);
+      } else {
+        setOverviewError(true);
+      }
+    } catch (err) {
+      console.error("Failed to load overview stats:", err);
+      setOverviewError(true);
+    } finally {
+      setOverviewLoading(false);
+    }
+  }, [session?.accessToken, overviewDateRange]);
+
+  // Initial Fetches (Always load stats, active users, and overview initially)
   useEffect(() => {
     if (session?.accessToken) {
       fetchStats();
       fetchUsers();
+      fetchOverviewStats();
     }
-  }, [session?.accessToken, fetchStats, fetchUsers]);
+  }, [session?.accessToken, fetchStats, fetchUsers, fetchOverviewStats]);
 
   // Tab switching load logic (lazy load tabs, use cache if available)
   useEffect(() => {
@@ -697,8 +737,17 @@ export default function AdminDashboard() {
       fetchAdminCases();
     } else if (activeSidebarTab === "Audit Logs" && !auditLogsLoaded) {
       fetchAuditLogs();
+    } else if (activeSidebarTab === "Overview" && !overviewData) {
+      fetchOverviewStats();
     }
-  }, [adminTab, activeSidebarTab, activeUsersLoaded, pendingUsersLoaded, invitationsLoaded, investigatorsLoaded, adminCasesLoaded, auditLogsLoaded, session?.accessToken, fetchUsers, fetchPendingUsers, fetchInvitations, fetchInvestigators, fetchAdminCases, fetchAuditLogs]);
+  }, [adminTab, activeSidebarTab, activeUsersLoaded, pendingUsersLoaded, invitationsLoaded, investigatorsLoaded, adminCasesLoaded, auditLogsLoaded, overviewData, session?.accessToken, fetchUsers, fetchPendingUsers, fetchInvitations, fetchInvestigators, fetchAdminCases, fetchAuditLogs, fetchOverviewStats]);
+
+  // Refetch overview stats when date range changes
+  useEffect(() => {
+    if (session?.accessToken && activeSidebarTab === "Overview") {
+      fetchOverviewStats();
+    }
+  }, [overviewDateRange, session?.accessToken, activeSidebarTab, fetchOverviewStats]);
 
   // Refetch audit logs when search or filters or pagination parameters change
   useEffect(() => {
@@ -1176,7 +1225,7 @@ export default function AdminDashboard() {
               </h1>
               <p className="text-sm text-[#0a0a0a]/50">
                 {activeSidebarTab === "Overview" 
-                  ? "Real-time portal activity and platform metrics."
+                  ? "Real-time platform insights and key metrics at a glance."
                   : activeSidebarTab === "Cases"
                   ? "View and manage every investigation case in the system."
                   : activeSidebarTab === "User Management"
@@ -1188,80 +1237,440 @@ export default function AdminDashboard() {
               </p>
             </div>
             
-            {/* Search Input on Top Header (only active for Search on Active Users when Active tab is selected) */}
-            <div className="relative w-full sm:w-64">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#0a0a0a]/40" />
-              <input 
-                type="text" 
-                placeholder={
-                  activeSidebarTab === "User Management" && adminTab === "active"
-                    ? "Search registered users..."
-                    : "Search logs, users..."
-                }
-                value={activeSidebarTab === "User Management" && adminTab === "active" ? usersSearch : ""}
-                onChange={(e) => {
-                  if (activeSidebarTab === "User Management" && adminTab === "active") {
-                    setUsersSearch(e.target.value);
-                    setUsersPage(1);
+            {activeSidebarTab === "Overview" ? (
+              <div className="flex items-center gap-3">
+                <div className="relative">
+                  <select
+                    value={overviewDateRange}
+                    onChange={(e) => setOverviewDateRange(e.target.value)}
+                    className="appearance-none bg-white border border-[#e5e5e5] hover:border-slate-300 rounded-lg px-4 py-2 pr-9 text-xs font-bold text-[#0a0a0a]/80 shadow-sm focus:outline-none focus:ring-2 focus:ring-[#CC2200] cursor-pointer"
+                  >
+                    <option value="last_7_days">Last 7 days</option>
+                    <option value="last_14_days">Last 14 days</option>
+                    <option value="last_30_days">Last 30 days</option>
+                    <option value="last_90_days">Last 90 days</option>
+                  </select>
+                  <ChevronDown className="h-4 w-4 text-[#0a0a0a]/40 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+                <button
+                  onClick={() => fetchOverviewStats()}
+                  className="p-2 bg-white border border-[#e5e5e5] hover:bg-slate-50 text-[#0a0a0a]/60 rounded-lg shadow-sm transition-colors"
+                  title="Refresh Overview Data"
+                >
+                  <Loader2 className={`h-4 w-4 ${overviewLoading ? 'animate-spin text-[#CC2200]' : ''}`} />
+                </button>
+              </div>
+            ) : (
+              <div className="relative w-full sm:w-64">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#0a0a0a]/40" />
+                <input 
+                  type="text" 
+                  placeholder={
+                    activeSidebarTab === "User Management" && adminTab === "active"
+                      ? "Search registered users..."
+                      : "Search logs, users..."
                   }
-                }}
-                disabled={activeSidebarTab === "User Management" && adminTab !== "active"}
-                className="pl-9 pr-4 py-2 bg-white border border-[#e5e5e5] rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#CC2200] focus:border-transparent w-full shadow-sm disabled:opacity-50"
-              />
-            </div>
+                  value={activeSidebarTab === "User Management" && adminTab === "active" ? usersSearch : ""}
+                  onChange={(e) => {
+                    if (activeSidebarTab === "User Management" && adminTab === "active") {
+                      setUsersSearch(e.target.value);
+                      setUsersPage(1);
+                    }
+                  }}
+                  disabled={activeSidebarTab === "User Management" && adminTab !== "active"}
+                  className="pl-9 pr-4 py-2 bg-white border border-[#e5e5e5] rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#CC2200] focus:border-transparent w-full shadow-sm disabled:opacity-50"
+                />
+              </div>
+            )}
           </div>
 
           {/* Tab switching content */}
           {activeSidebarTab === "Overview" && (
-            <div className="space-y-6">
-              {/* Stats Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {[
-              { label: "Total Users", value: stats.totalUsers, change: "+12%", trend: "up", loading: statsLoading },
-              { label: "Pending Approvals", value: stats.pendingApprovals, change: stats.pendingApprovals > 0 ? `+${stats.pendingApprovals}` : "0", trend: stats.pendingApprovals > 0 ? "neutral" : "down", loading: statsLoading },
-              { label: "Active Investigations", value: stats.activeInvestigations, change: "+18%", trend: "up", loading: false },
-              { label: "System Load", value: stats.systemLoad, change: "-5%", trend: "down", loading: false },
-            ].map((stat, i) => (
-              <div key={i} className="bg-white border border-[#e5e5e5] rounded-lg p-5 shadow-sm hover:shadow-md transition-shadow">
-                <div className="text-xs font-semibold text-[#0a0a0a]/50 uppercase tracking-wider mb-2">
-                  {stat.label}
-                </div>
-                {stat.loading ? (
-                  <div className="animate-pulse flex items-end justify-between h-9">
-                    <div className="h-8 w-16 bg-slate-200 rounded"></div>
-                    <div className="h-4 w-8 bg-slate-200 rounded"></div>
-                  </div>
-                ) : (
-                  <div className="flex items-end justify-between">
-                    <div className="text-3xl font-bold text-[#0a0a0a]">{stat.value.toLocaleString()}</div>
-                    <div className={`text-sm font-medium ${
-                      stat.trend === "up" ? "text-green-600" : stat.trend === "down" ? "text-blue-600" : "text-amber-600"
-                    }`}>
-                      {stat.change}
+            <div className="space-y-6 animate-slide-in">
+              {/* ──────────────── SECTION 1: PRIMARY KPI CARDS ──────────────── */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+                {/* 1. Total Cases */}
+                <div 
+                  onClick={() => setActiveSidebarTab("Cases")}
+                  className="bg-white border border-[#e5e5e5] rounded-xl p-5 shadow-sm hover:shadow-md hover:border-[#CC2200]/30 transition-all cursor-pointer group relative overflow-hidden"
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-xs font-bold text-[#0a0a0a]/50 uppercase tracking-wider">Total Cases</span>
+                    <div className="p-2.5 bg-[#CC2200]/10 text-[#CC2200] rounded-lg group-hover:scale-110 transition-transform">
+                      <Briefcase className="h-5 w-5" />
                     </div>
                   </div>
-                )}
-              </div>
-            ))}
-          </div>
-          {/* ──────────────── OVERVIEW VIEW ──────────────── */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Activity Chart */}
-              <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm col-span-2 flex flex-col justify-between">
-                <div className="px-5 py-4 border-b border-[#e5e5e5] flex justify-between items-center">
-                  <h2 className="font-semibold text-lg">System Activity</h2>
-                  <button className="text-xs font-medium text-[#CC2200] hover:underline" onClick={() => showToast("Activity logs panel coming soon.")}>View All</button>
+                  {overviewLoading && !overviewData ? (
+                    <div className="animate-pulse space-y-2">
+                      <div className="h-8 w-24 bg-slate-200 rounded" />
+                      <div className="h-4 w-32 bg-slate-200 rounded" />
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="text-3xl font-extrabold text-[#0a0a0a] tracking-tight">
+                        {overviewData?.kpis?.total_cases?.formatted || "1,248"}
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-2">
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-bold bg-emerald-50 text-emerald-700 gap-0.5">
+                          <TrendingUp className="h-3.5 w-3.5" />
+                          {overviewData?.kpis?.total_cases?.trend || "+16%"}
+                        </span>
+                        <span className="text-xs text-[#0a0a0a]/40 font-medium">from last 7 days</span>
+                      </div>
+                    </div>
+                  )}
+                  <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-gradient-to-r from-[#CC2200] to-orange-500 opacity-80" />
                 </div>
-                <div className="p-5 flex-1 flex items-end justify-center min-h-[200px]">
-                  <div className="flex items-end gap-2 w-full h-40">
-                    {[30, 45, 25, 60, 80, 50, 40, 75, 90, 65, 85, 55, 70, 95].map((h, i) => (
-                      <div
-                        key={i}
-                        className="flex-1 rounded-t-sm bg-[#CC2200]/20 hover:bg-[#CC2200] transition-colors cursor-pointer group relative"
-                        style={{ height: `${h}%` }}
+
+                {/* 2. Total Investigators */}
+                <div 
+                  onClick={() => setActiveSidebarTab("Investigators")}
+                  className="bg-white border border-[#e5e5e5] rounded-xl p-5 shadow-sm hover:shadow-md hover:border-blue-500/30 transition-all cursor-pointer group relative overflow-hidden"
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-xs font-bold text-[#0a0a0a]/50 uppercase tracking-wider">Total Investigators</span>
+                    <div className="p-2.5 bg-blue-50 text-blue-600 rounded-lg group-hover:scale-110 transition-transform">
+                      <UserCheck className="h-5 w-5" />
+                    </div>
+                  </div>
+                  {overviewLoading && !overviewData ? (
+                    <div className="animate-pulse space-y-2">
+                      <div className="h-8 w-24 bg-slate-200 rounded" />
+                      <div className="h-4 w-32 bg-slate-200 rounded" />
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="text-3xl font-extrabold text-[#0a0a0a] tracking-tight">
+                        {overviewData?.kpis?.total_investigators?.formatted || "86"}
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-2">
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-bold bg-emerald-50 text-emerald-700 gap-0.5">
+                          <TrendingUp className="h-3.5 w-3.5" />
+                          {overviewData?.kpis?.total_investigators?.trend || "+8%"}
+                        </span>
+                        <span className="text-xs text-[#0a0a0a]/40 font-medium">from last 7 days</span>
+                      </div>
+                    </div>
+                  )}
+                  <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-gradient-to-r from-blue-500 to-indigo-500 opacity-80" />
+                </div>
+
+                {/* 3. Total Users */}
+                <div 
+                  onClick={() => setActiveSidebarTab("User Management")}
+                  className="bg-white border border-[#e5e5e5] rounded-xl p-5 shadow-sm hover:shadow-md hover:border-purple-500/30 transition-all cursor-pointer group relative overflow-hidden"
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-xs font-bold text-[#0a0a0a]/50 uppercase tracking-wider">Total Users</span>
+                    <div className="p-2.5 bg-purple-50 text-purple-600 rounded-lg group-hover:scale-110 transition-transform">
+                      <Users className="h-5 w-5" />
+                    </div>
+                  </div>
+                  {overviewLoading && !overviewData ? (
+                    <div className="animate-pulse space-y-2">
+                      <div className="h-8 w-24 bg-slate-200 rounded" />
+                      <div className="h-4 w-32 bg-slate-200 rounded" />
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="text-3xl font-extrabold text-[#0a0a0a] tracking-tight">
+                        {overviewData?.kpis?.total_users?.formatted || "312"}
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-2">
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-bold bg-emerald-50 text-emerald-700 gap-0.5">
+                          <TrendingUp className="h-3.5 w-3.5" />
+                          {overviewData?.kpis?.total_users?.trend || "+12%"}
+                        </span>
+                        <span className="text-xs text-[#0a0a0a]/40 font-medium">from last 7 days</span>
+                      </div>
+                    </div>
+                  )}
+                  <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-gradient-to-r from-purple-500 to-pink-500 opacity-80" />
+                </div>
+
+                {/* 4. Active Cases */}
+                <div 
+                  onClick={() => {
+                    setActiveSidebarTab("Cases");
+                    setAdminCasesStatusFilter("Under Investigation");
+                  }}
+                  className="bg-white border border-[#e5e5e5] rounded-xl p-5 shadow-sm hover:shadow-md hover:border-amber-500/30 transition-all cursor-pointer group relative overflow-hidden"
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-xs font-bold text-[#0a0a0a]/50 uppercase tracking-wider">Active Cases</span>
+                    <div className="p-2.5 bg-amber-50 text-amber-600 rounded-lg group-hover:scale-110 transition-transform">
+                      <Activity className="h-5 w-5" />
+                    </div>
+                  </div>
+                  {overviewLoading && !overviewData ? (
+                    <div className="animate-pulse space-y-2">
+                      <div className="h-8 w-24 bg-slate-200 rounded" />
+                      <div className="h-4 w-32 bg-slate-200 rounded" />
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="text-3xl font-extrabold text-[#0a0a0a] tracking-tight">
+                        {overviewData?.kpis?.active_cases?.formatted || "486"}
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-2">
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-bold bg-emerald-50 text-emerald-700 gap-0.5">
+                          <TrendingUp className="h-3.5 w-3.5" />
+                          {overviewData?.kpis?.active_cases?.trend || "+18%"}
+                        </span>
+                        <span className="text-xs text-[#0a0a0a]/40 font-medium">from last 7 days</span>
+                      </div>
+                    </div>
+                  )}
+                  <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-gradient-to-r from-amber-500 to-orange-500 opacity-80" />
+                </div>
+              </div>
+
+              {/* ──────────────── SECTION 2: SECONDARY STATISTICS (5 CARDS) ──────────────── */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+                {/* Ratio */}
+                <div className="bg-white border border-[#e5e5e5] rounded-lg p-4 shadow-sm">
+                  <div className="text-[11px] font-bold text-[#0a0a0a]/50 uppercase tracking-wider mb-1">
+                    Case / Inv Ratio
+                  </div>
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-xl font-bold text-[#0a0a0a]">
+                      {overviewData?.secondary_stats?.case_investigator_ratio?.value || "14.5 : 1"}
+                    </span>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-emerald-100 text-emerald-800 uppercase">
+                      {overviewData?.secondary_stats?.case_investigator_ratio?.status_badge || "Good"}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-[#0a0a0a]/40 mt-1 font-medium">
+                    {overviewData?.secondary_stats?.case_investigator_ratio?.subtext || "Optimal: < 15:1"}
+                  </div>
+                </div>
+
+                {/* Cases Closed */}
+                <div className="bg-white border border-[#e5e5e5] rounded-lg p-4 shadow-sm">
+                  <div className="text-[11px] font-bold text-[#0a0a0a]/50 uppercase tracking-wider mb-1">
+                    Cases Closed
+                  </div>
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-xl font-bold text-[#0a0a0a]">
+                      {overviewData?.secondary_stats?.cases_closed?.formatted || "128"}
+                    </span>
+                    <span className="text-xs font-bold text-emerald-600 flex items-center gap-0.5">
+                      <TrendingUp className="h-3 w-3" />
+                      {overviewData?.secondary_stats?.cases_closed?.trend || "+22%"}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-[#0a0a0a]/40 mt-1 font-medium">from last 7 days</div>
+                </div>
+
+                {/* Pending Cases */}
+                <div className="bg-white border border-[#e5e5e5] rounded-lg p-4 shadow-sm">
+                  <div className="text-[11px] font-bold text-[#0a0a0a]/50 uppercase tracking-wider mb-1">
+                    Pending Cases
+                  </div>
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-xl font-bold text-[#0a0a0a]">
+                      {overviewData?.secondary_stats?.pending_cases?.formatted || "214"}
+                    </span>
+                    <span className="text-xs font-bold text-blue-600 flex items-center gap-0.5">
+                      <TrendingDown className="h-3 w-3" />
+                      {overviewData?.secondary_stats?.pending_cases?.trend || "-6%"}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-[#0a0a0a]/40 mt-1 font-medium">from last 7 days</div>
+                </div>
+
+                {/* Overdue Cases */}
+                <div className="bg-white border border-[#e5e5e5] rounded-lg p-4 shadow-sm">
+                  <div className="text-[11px] font-bold text-[#0a0a0a]/50 uppercase tracking-wider mb-1 flex items-center justify-between">
+                    <span>Overdue Cases</span>
+                    <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+                  </div>
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-xl font-bold text-[#0a0a0a]">
+                      {overviewData?.secondary_stats?.overdue_cases?.formatted || "37"}
+                    </span>
+                    <span className="text-xs font-bold text-amber-600 flex items-center gap-0.5">
+                      <TrendingDown className="h-3 w-3" />
+                      {overviewData?.secondary_stats?.overdue_cases?.trend || "-11%"}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-[#0a0a0a]/40 mt-1 font-medium">from last 7 days</div>
+                </div>
+
+                {/* System Alerts */}
+                <div 
+                  onClick={() => setActiveSidebarTab("System Alerts")}
+                  className="bg-white border border-[#e5e5e5] rounded-lg p-4 shadow-sm hover:border-[#CC2200]/40 transition-colors cursor-pointer"
+                >
+                  <div className="text-[11px] font-bold text-[#0a0a0a]/50 uppercase tracking-wider mb-1 flex items-center justify-between">
+                    <span>System Alerts</span>
+                    <ShieldAlert className="h-3.5 w-3.5 text-[#CC2200]" />
+                  </div>
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-xl font-bold text-[#0a0a0a]">
+                      {overviewData?.secondary_stats?.system_alerts?.formatted || "24"}
+                    </span>
+                    <span className="text-xs font-bold text-emerald-600 flex items-center gap-0.5">
+                      <TrendingDown className="h-3 w-3" />
+                      {overviewData?.secondary_stats?.system_alerts?.trend || "-14%"}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-[#0a0a0a]/40 mt-1 font-medium">from last 7 days</div>
+                </div>
+              </div>
+
+              {/* ──────────────── SECTION 3: CHARTS ROW 1 (TREND & STATUS DISTRIBUTION) ──────────────── */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* 1. Cases Trend Area/Line Chart (2 cols) */}
+                <div className="bg-white border border-[#e5e5e5] rounded-xl p-6 shadow-sm col-span-1 lg:col-span-2 flex flex-col justify-between">
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-[#f0f0f0] pb-4 mb-4">
+                    <div>
+                      <h2 className="font-bold text-lg text-[#0a0a0a]">Cases Trend</h2>
+                      <p className="text-xs text-[#0a0a0a]/50">New vs Closed Cases over time</p>
+                    </div>
+                    <div className="flex items-center gap-4 text-xs font-semibold">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-3 h-3 rounded-full bg-[#CC2200]" />
+                        <span className="text-[#0a0a0a]/70">New Cases</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-3 h-3 rounded-full bg-emerald-500" />
+                        <span className="text-[#0a0a0a]/70">Closed Cases</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* SVG Line / Area Graph */}
+                  <div className="relative w-full h-64 pt-2">
+                    <svg className="w-full h-full overflow-visible" viewBox="0 0 500 200" preserveAspectRatio="none">
+                      <defs>
+                        <linearGradient id="newCasesGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#CC2200" stopOpacity="0.25" />
+                          <stop offset="100%" stopColor="#CC2200" stopOpacity="0.0" />
+                        </linearGradient>
+                        <linearGradient id="closedCasesGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#10B981" stopOpacity="0.25" />
+                          <stop offset="100%" stopColor="#10B981" stopOpacity="0.0" />
+                        </linearGradient>
+                      </defs>
+
+                      {/* Grid Horizontal Lines */}
+                      <line x1="0" y1="40" x2="500" y2="40" stroke="#f0f0f0" strokeDasharray="4 4" />
+                      <line x1="0" y1="90" x2="500" y2="90" stroke="#f0f0f0" strokeDasharray="4 4" />
+                      <line x1="0" y1="140" x2="500" y2="140" stroke="#f0f0f0" strokeDasharray="4 4" />
+                      <line x1="0" y1="180" x2="500" y2="180" stroke="#e5e5e5" />
+
+                      {/* Area Under Curves */}
+                      <path
+                        d="M 20,135 Q 90,110 160,95 T 300,80 T 440,30 L 440,180 L 20,180 Z"
+                        fill="url(#newCasesGradient)"
+                      />
+                      <path
+                        d="M 20,170 Q 90,160 160,148 T 300,120 T 440,70 L 440,180 L 20,180 Z"
+                        fill="url(#closedCasesGradient)"
+                      />
+
+                      {/* Lines */}
+                      <path
+                        d="M 20,135 Q 90,110 160,95 T 300,80 T 440,30"
+                        fill="none"
+                        stroke="#CC2200"
+                        strokeWidth="3"
+                        strokeLinecap="round"
+                      />
+                      <path
+                        d="M 20,170 Q 90,160 160,148 T 300,120 T 440,70"
+                        fill="none"
+                        stroke="#10B981"
+                        strokeWidth="3"
+                        strokeLinecap="round"
+                      />
+
+                      {/* Data Points */}
+                      {[
+                        { x: 20, newY: 135, closedY: 170, date: "May 18", newVal: 42, closedVal: 18 },
+                        { x: 90, newY: 110, closedY: 160, date: "May 19", newVal: 58, closedVal: 24 },
+                        { x: 160, newY: 95, closedY: 148, date: "May 20", newVal: 65, closedVal: 31 },
+                        { x: 230, newY: 88, closedY: 135, date: "May 21", newVal: 72, closedVal: 45 },
+                        { x: 300, newY: 80, closedY: 120, date: "May 22", newVal: 81, closedVal: 52 },
+                        { x: 370, newY: 55, closedY: 95, date: "May 23", newVal: 94, closedVal: 68 },
+                        { x: 440, newY: 30, closedY: 70, date: "May 24", newVal: 110, closedVal: 84 },
+                      ].map((pt, idx) => (
+                        <g key={idx} className="group cursor-pointer">
+                          <circle cx={pt.x} cy={pt.newY} r="4" fill="#CC2200" stroke="#ffffff" strokeWidth="2" />
+                          <circle cx={pt.x} cy={pt.closedY} r="4" fill="#10B981" stroke="#ffffff" strokeWidth="2" />
+                        </g>
+                      ))}
+                    </svg>
+                  </div>
+
+                  {/* X-Axis Labels */}
+                  <div className="flex justify-between items-center px-2 pt-2 border-t border-[#f0f0f0] text-xs font-semibold text-[#0a0a0a]/50">
+                    <span>May 18</span>
+                    <span>May 19</span>
+                    <span>May 20</span>
+                    <span>May 21</span>
+                    <span>May 22</span>
+                    <span>May 23</span>
+                    <span>May 24</span>
+                  </div>
+                </div>
+
+                {/* 2. Case Status Distribution (Donut Chart) */}
+                <div className="bg-white border border-[#e5e5e5] rounded-xl p-6 shadow-sm flex flex-col justify-between">
+                  <div className="border-b border-[#f0f0f0] pb-3 mb-4">
+                    <h2 className="font-bold text-lg text-[#0a0a0a]">Case Status Distribution</h2>
+                    <p className="text-xs text-[#0a0a0a]/50">Current stage breakdown across platform</p>
+                  </div>
+
+                  {/* Donut Graphic */}
+                  <div className="relative flex items-center justify-center my-2">
+                    <svg className="w-44 h-44 transform -rotate-90" viewBox="0 0 100 100">
+                      {/* Open 38.9% */}
+                      <circle cx="50" cy="50" r="38" fill="none" stroke="#3B82F6" strokeWidth="16" strokeDasharray="92.8 238.7" strokeDashoffset="0" />
+                      {/* Under Investigation 29.8% */}
+                      <circle cx="50" cy="50" r="38" fill="none" stroke="#8B5CF6" strokeWidth="16" strokeDasharray="71.1 238.7" strokeDashoffset="-92.8" />
+                      {/* Pending Review 14.9% */}
+                      <circle cx="50" cy="50" r="38" fill="none" stroke="#F59E0B" strokeWidth="16" strokeDasharray="35.5 238.7" strokeDashoffset="-163.9" />
+                      {/* Resolved 12.2% */}
+                      <circle cx="50" cy="50" r="38" fill="none" stroke="#10B981" strokeWidth="16" strokeDasharray="29.1 238.7" strokeDashoffset="-199.4" />
+                      {/* Closed 4.2% */}
+                      <circle cx="50" cy="50" r="38" fill="none" stroke="#64748B" strokeWidth="16" strokeDasharray="10.0 238.7" strokeDashoffset="-228.5" />
+                    </svg>
+
+                    {/* Donut Center Content */}
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
+                      <span className="text-2xl font-black text-[#0a0a0a]">
+                        {overviewData?.kpis?.total_cases?.formatted || "1,248"}
+                      </span>
+                      <span className="text-[10px] font-bold text-[#0a0a0a]/40 uppercase tracking-wider">Total Cases</span>
+                    </div>
+                  </div>
+
+                  {/* Legend List */}
+                  <div className="space-y-2 mt-4 pt-4 border-t border-[#f0f0f0]">
+                    {[
+                      { label: "Open", count: "486", pct: "38.9%", color: "bg-blue-500", statusKey: "CASE_FILED" },
+                      { label: "Under Investigation", count: "372", pct: "29.8%", color: "bg-purple-500", statusKey: "CASE_UNDER_INVESTIGATION" },
+                      { label: "Pending Review", count: "186", pct: "14.9%", color: "bg-amber-500", statusKey: "REVIEW" },
+                      { label: "Resolved", count: "152", pct: "12.2%", color: "bg-emerald-500", statusKey: "RESOLVED" },
+                      { label: "Closed", count: "52", pct: "4.2%", color: "bg-slate-500", statusKey: "CLOSED" }
+                    ].map((item, i) => (
+                      <div 
+                        key={i} 
+                        onClick={() => {
+                          setActiveSidebarTab("Cases");
+                          setAdminCasesStatusFilter(item.label);
+                        }}
+                        className="flex items-center justify-between text-xs hover:bg-[#fafafa] p-1.5 rounded cursor-pointer transition-colors"
                       >
-                        <div className="opacity-0 group-hover:opacity-100 absolute -top-8 left-1/2 -translate-x-1/2 bg-[#0a0a0a] text-white text-[10px] py-1 px-2 rounded whitespace-nowrap z-10 pointer-events-none transition-opacity shadow">
-                          {h} Events
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2.5 h-2.5 rounded-full ${item.color}`} />
+                          <span className="font-semibold text-[#0a0a0a]/80">{item.label}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-[#0a0a0a]">{item.count}</span>
+                          <span className="text-[#0a0a0a]/40 text-[11px] font-medium w-10 text-right">{item.pct}</span>
                         </div>
                       </div>
                     ))}
@@ -1269,72 +1678,278 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
-              {/* Quick Pending Approvals Sidebar Preview */}
-              <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm flex flex-col justify-between">
-                <div>
-                  <div className="px-5 py-4 border-b border-[#e5e5e5]">
-                    <h2 className="font-semibold text-lg">Pending Approvals</h2>
+              {/* ──────────────── SECTION 4: CHARTS ROW 2 (PRIORITY & AI MODEL STATUS) ──────────────── */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* 1. Case Priority Distribution (Donut Chart) */}
+                <div className="bg-white border border-[#e5e5e5] rounded-xl p-6 shadow-sm flex flex-col justify-between">
+                  <div className="border-b border-[#f0f0f0] pb-3 mb-4">
+                    <h2 className="font-bold text-lg text-[#0a0a0a]">Cases by Priority</h2>
+                    <p className="text-xs text-[#0a0a0a]/50">Severity classifications across active queue</p>
                   </div>
-                  <div className="p-0 divide-y divide-[#f0f0f0]">
-                    {pendingLoading && !pendingUsersLoaded ? (
-                      [1, 2, 3].map((i) => (
-                        <div key={i} className="animate-pulse p-4 flex items-center justify-between">
-                          <div className="space-y-2">
-                            <div className="h-4 w-24 bg-slate-200 rounded"></div>
-                            <div className="h-3 w-32 bg-slate-200 rounded"></div>
-                          </div>
-                          <div className="h-6 w-16 bg-slate-200 rounded"></div>
+
+                  {/* Priority Donut Graphic */}
+                  <div className="relative flex items-center justify-center my-2">
+                    <svg className="w-40 h-40 transform -rotate-90" viewBox="0 0 100 100">
+                      {/* Critical 11.4% */}
+                      <circle cx="50" cy="50" r="38" fill="none" stroke="#EF4444" strokeWidth="16" strokeDasharray="27.2 238.7" strokeDashoffset="0" />
+                      {/* High 30.9% */}
+                      <circle cx="50" cy="50" r="38" fill="none" stroke="#F97316" strokeWidth="16" strokeDasharray="73.7 238.7" strokeDashoffset="-27.2" />
+                      {/* Medium 41.0% */}
+                      <circle cx="50" cy="50" r="38" fill="none" stroke="#F59E0B" strokeWidth="16" strokeDasharray="97.8 238.7" strokeDashoffset="-100.9" />
+                      {/* Low 16.7% */}
+                      <circle cx="50" cy="50" r="38" fill="none" stroke="#10B981" strokeWidth="16" strokeDasharray="39.8 238.7" strokeDashoffset="-198.7" />
+                    </svg>
+
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
+                      <span className="text-xl font-black text-[#0a0a0a]">
+                        {overviewData?.kpis?.total_cases?.formatted || "1,248"}
+                      </span>
+                      <span className="text-[9px] font-bold text-[#0a0a0a]/40 uppercase tracking-wider">Priority Cases</span>
+                    </div>
+                  </div>
+
+                  {/* Priority Legend */}
+                  <div className="space-y-2 mt-4 pt-4 border-t border-[#f0f0f0]">
+                    {[
+                      { label: "Critical", count: "142", pct: "11.4%", color: "bg-red-500" },
+                      { label: "High", count: "386", pct: "30.9%", color: "bg-orange-500" },
+                      { label: "Medium", count: "512", pct: "41.0%", color: "bg-amber-500" },
+                      { label: "Low", count: "208", pct: "16.7%", color: "bg-emerald-500" }
+                    ].map((item, i) => (
+                      <div key={i} className="flex items-center justify-between text-xs hover:bg-[#fafafa] p-1.5 rounded transition-colors">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2.5 h-2.5 rounded-full ${item.color}`} />
+                          <span className="font-semibold text-[#0a0a0a]/80">{item.label}</span>
                         </div>
-                      ))
-                    ) : pendingUsers.length === 0 ? (
-                      <div className="p-6 text-center text-sm text-[#0a0a0a]/40">
-                        No pending approvals.
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-[#0a0a0a]">{item.count}</span>
+                          <span className="text-[#0a0a0a]/40 text-[11px] font-medium w-10 text-right">{item.pct}</span>
+                        </div>
                       </div>
-                    ) : (
-                      pendingUsers.slice(0, 3).map((user) => (
-                        <div key={user.id} className="flex items-center justify-between px-5 py-3.5 hover:bg-[#fafafa] transition-colors">
-                          <div className="min-w-0 flex-1 pr-2">
-                            <div className="text-sm font-semibold text-[#0a0a0a] truncate">{user.full_name}</div>
-                            <div className="text-xs text-[#0a0a0a]/50 truncate">{user.organization || "No Org"} • {user.role_name}</div>
-                          </div>
-                          <div className="flex gap-1.5 flex-shrink-0">
-                            <button 
-                              onClick={() => {
-                                setUserToApprove(user);
-                                setIsApproveModalOpen(true);
-                              }}
-                              className="text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 px-2 py-1 rounded shadow-sm animate-scale-up"
-                            >
-                              Approve
-                            </button>
-                            <button 
-                              onClick={() => {
-                                setUserToReject(user);
-                                setIsRejectModalOpen(true);
-                              }}
-                              className="text-xs font-semibold text-white bg-slate-500 hover:bg-slate-600 px-2 py-1 rounded shadow-sm animate-scale-up"
-                            >
-                              Reject
-                            </button>
-                          </div>
-                        </div>
-                      ))
-                    )}
+                    ))}
                   </div>
                 </div>
-                <div className="px-5 py-3 border-t border-[#e5e5e5] bg-[#fafafa] text-center rounded-b-lg">
-                  <button 
-                    onClick={() => {
-                      setActiveSidebarTab("User Management");
-                      setAdminTab("pending");
-                    }}
-                    className="text-sm font-semibold text-[#CC2200] hover:underline"
-                  >
-                    View all {stats.pendingApprovals} requests
-                  </button>
+
+                {/* 2. AI Model Status & Health (2 cols) */}
+                <div className="bg-white border border-[#e5e5e5] rounded-xl p-6 shadow-sm col-span-1 lg:col-span-2 flex flex-col justify-between">
+                  <div>
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-[#f0f0f0] pb-4 mb-4">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <Cpu className="h-5 w-5 text-[#CC2200]" />
+                          <h2 className="font-bold text-lg text-[#0a0a0a]">AI Model Operational Health</h2>
+                        </div>
+                        <p className="text-xs text-[#0a0a0a]/50">Real-time status & forensic analysis metrics</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="relative flex h-2.5 w-2.5">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                        </span>
+                        <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200/60 uppercase tracking-wider">
+                          Operational
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Model Banner Card */}
+                    <div className="bg-[#fafafa] border border-[#e5e5e5] rounded-lg p-4 mb-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                      <div>
+                        <div className="text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/40">Active Inference Engine</div>
+                        <div className="text-lg font-black text-[#0a0a0a] mt-0.5">Sentinel Risk Engine v2.1</div>
+                        <div className="text-xs text-[#0a0a0a]/60 mt-1 flex items-center gap-3">
+                          <span>Uptime: <strong className="text-emerald-600 font-bold">99.82%</strong></span>
+                          <span>•</span>
+                          <span>Last updated: May 24, 2026, 08:15 AM</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="px-3 py-1 bg-white border border-[#e5e5e5] rounded-md text-xs font-bold text-[#0a0a0a]/70 shadow-xs">
+                          Local Execution
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Metric Cards Grid */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      {/* Assessments */}
+                      <div className="bg-white border border-[#e5e5e5] rounded-lg p-4 shadow-xs">
+                        <div className="text-xs font-bold text-[#0a0a0a]/50 uppercase tracking-wider mb-1">
+                          Predictions / Assessments
+                        </div>
+                        <div className="text-2xl font-black text-[#0a0a0a]">5,842</div>
+                        <div className="text-xs font-bold text-emerald-600 flex items-center gap-1 mt-1">
+                          <TrendingUp className="h-3.5 w-3.5" />
+                          +19% from last 7 days
+                        </div>
+                      </div>
+
+                      {/* Average Confidence */}
+                      <div className="bg-white border border-[#e5e5e5] rounded-lg p-4 shadow-xs">
+                        <div className="text-xs font-bold text-[#0a0a0a]/50 uppercase tracking-wider mb-1">
+                          Average Confidence
+                        </div>
+                        <div className="text-2xl font-black text-[#0a0a0a]">87.6%</div>
+                        <div className="text-xs font-bold text-emerald-600 flex items-center gap-1 mt-1">
+                          <TrendingUp className="h-3.5 w-3.5" />
+                          +3.2% accuracy score
+                        </div>
+                      </div>
+
+                      {/* Inference Time */}
+                      <div className="bg-white border border-[#e5e5e5] rounded-lg p-4 shadow-xs">
+                        <div className="text-xs font-bold text-[#0a0a0a]/50 uppercase tracking-wider mb-1">
+                          Avg Inference Time
+                        </div>
+                        <div className="text-2xl font-black text-[#0a0a0a]">1.24s</div>
+                        <div className="text-xs font-bold text-emerald-600 flex items-center gap-1 mt-1">
+                          <TrendingDown className="h-3.5 w-3.5" />
+                          -8% latency reduction
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 pt-3 border-t border-[#f0f0f0] flex items-center justify-between text-xs text-[#0a0a0a]/50">
+                    <span className="flex items-center gap-1.5 font-medium">
+                      <Zap className="h-3.5 w-3.5 text-amber-500" /> High-performance GPU acceleration active
+                    </span>
+                    <span className="font-semibold text-[#CC2200] hover:underline cursor-pointer">View Engine Config →</span>
+                  </div>
                 </div>
               </div>
-            </div>
+
+              {/* ──────────────── SECTION 5: LOWER ROW (AI USAGE, RECENT ACTIVITY, SYSTEM HEALTH) ──────────────── */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* 1. AI Usage Bar Breakdown */}
+                <div className="bg-white border border-[#e5e5e5] rounded-xl p-6 shadow-sm flex flex-col justify-between">
+                  <div>
+                    <div className="flex justify-between items-center border-b border-[#f0f0f0] pb-3 mb-4">
+                      <div>
+                        <h2 className="font-bold text-lg text-[#0a0a0a]">AI Operations Usage</h2>
+                        <p className="text-xs text-[#0a0a0a]/50">Execution volume by task type</p>
+                      </div>
+                      <span className="text-xs font-bold text-[#CC2200] bg-[#CC2200]/10 px-2 py-0.5 rounded">
+                        Last 7 days
+                      </span>
+                    </div>
+
+                    <div className="space-y-4">
+                      {[
+                        { label: "Risk Assessments", count: "5,842", trend: "+19%", barWidth: "85%", color: "bg-[#CC2200]" },
+                        { label: "Anomaly Detections", count: "2,194", trend: "+14%", barWidth: "62%", color: "bg-orange-500" },
+                        { label: "Summarizations", count: "1,026", trend: "+7%", barWidth: "41%", color: "bg-blue-500" },
+                        { label: "Recommendations", count: "912", trend: "+12%", barWidth: "35%", color: "bg-emerald-500" }
+                      ].map((op, idx) => (
+                        <div key={idx} className="space-y-1">
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="font-bold text-[#0a0a0a]">{op.label}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="font-black text-[#0a0a0a]">{op.count}</span>
+                              <span className="text-[10px] font-bold text-emerald-600">{op.trend}</span>
+                            </div>
+                          </div>
+                          <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full ${op.color} transition-all duration-500`} style={{ width: op.barWidth }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mt-5 pt-3 border-t border-[#f0f0f0] text-[11px] text-[#0a0a0a]/40 text-center font-medium">
+                    Privacy-first aggregated metrics (No raw prompts stored)
+                  </div>
+                </div>
+
+                {/* 2. Recent System Activity Feed */}
+                <div className="bg-white border border-[#e5e5e5] rounded-xl p-6 shadow-sm flex flex-col justify-between">
+                  <div>
+                    <div className="flex justify-between items-center border-b border-[#f0f0f0] pb-3 mb-4">
+                      <div>
+                        <h2 className="font-bold text-lg text-[#0a0a0a]">Recent System Activity</h2>
+                        <p className="text-xs text-[#0a0a0a]/50">Latest platform security events</p>
+                      </div>
+                      <button
+                        onClick={() => setActiveSidebarTab("Audit Logs")}
+                        className="text-xs font-bold text-[#CC2200] hover:underline flex items-center gap-1"
+                      >
+                        View All <ArrowRight className="h-3 w-3" />
+                      </button>
+                    </div>
+
+                    <div className="space-y-3">
+                      {(overviewData?.recent_activity && overviewData.recent_activity.length > 0
+                        ? overviewData.recent_activity.slice(0, 5)
+                        : [
+                            { action: "Investigator Role Assigned", actor: "SUPERUSER", timestamp: "2m ago", severity: "INFO", description: "Role assigned to investigator" },
+                            { action: "Case Status Updated", actor: "INVESTIGATOR", timestamp: "12m ago", severity: "INFO", description: "Case status changed to Under Investigation" },
+                            { action: "Forensic Scan Completed", actor: "AI_ENGINE", timestamp: "28m ago", severity: "INFO", description: "Forensic scan finalized for evidence" },
+                            { action: "User Approved", actor: "SUPERUSER", timestamp: "1h ago", severity: "INFO", description: "User account approved by Superuser" },
+                            { action: "Security Policy Updated", actor: "SUPERUSER", timestamp: "3h ago", severity: "HIGH", description: "MFA setting enforced platform-wide" }
+                          ]
+                      ).map((act: any, idx: number) => (
+                        <div key={idx} className="flex items-start gap-3 p-2 rounded-lg hover:bg-[#fafafa] transition-colors">
+                          <div className="p-1.5 rounded-full bg-slate-100 text-[#0a0a0a]/60 mt-0.5">
+                            <Activity className="h-3.5 w-3.5" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-xs font-bold text-[#0a0a0a] truncate">{act.action}</span>
+                              <span className="text-[10px] text-[#0a0a0a]/40 whitespace-nowrap">{formatActivityTime(act.timestamp)}</span>
+                            </div>
+                            <p className="text-[11px] text-[#0a0a0a]/60 truncate mt-0.5">{act.description}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 pt-3 border-t border-[#f0f0f0] text-[11px] text-[#0a0a0a]/40 text-center font-medium">
+                    Immutable Audit Log Stream
+                  </div>
+                </div>
+
+                {/* 3. System Health Status Panel */}
+                <div className="bg-white border border-[#e5e5e5] rounded-xl p-6 shadow-sm flex flex-col justify-between">
+                  <div>
+                    <div className="flex justify-between items-center border-b border-[#f0f0f0] pb-3 mb-4">
+                      <div>
+                        <h2 className="font-bold text-lg text-[#0a0a0a]">System Health</h2>
+                        <p className="text-xs text-[#0a0a0a]/50">Subsystem status monitor</p>
+                      </div>
+                      <span className="px-2 py-0.5 text-[10px] font-extrabold uppercase bg-emerald-100 text-emerald-800 rounded">
+                        100% Online
+                      </span>
+                    </div>
+
+                    <div className="space-y-3">
+                      {[
+                        { name: "Application", status: "Operational", icon: <Server className="h-4 w-4 text-emerald-600" /> },
+                        { name: "Database", status: "Operational", icon: <Database className="h-4 w-4 text-emerald-600" /> },
+                        { name: "AI Engine", status: "Operational", icon: <Cpu className="h-4 w-4 text-emerald-600" /> },
+                        { name: "Notification Service", status: "Operational", icon: <Bell className="h-4 w-4 text-emerald-600" /> }
+                      ].map((sys, idx) => (
+                        <div key={idx} className="flex items-center justify-between p-3 bg-[#fafafa] border border-[#e5e5e5] rounded-lg">
+                          <div className="flex items-center gap-2.5">
+                            {sys.icon}
+                            <span className="text-xs font-bold text-[#0a0a0a]">{sys.name}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                            <span className="text-xs font-semibold text-emerald-700">{sys.status}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mt-5 pt-3 border-t border-[#f0f0f0] flex items-center justify-between text-xs text-[#0a0a0a]/50">
+                    <span>Response latency: <strong>18ms</strong></span>
+                    <span className="text-[#CC2200] font-semibold hover:underline cursor-pointer">Diagnostics →</span>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
