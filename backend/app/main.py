@@ -125,15 +125,44 @@ def init_db_updates():
         db.execute(text("""
             CREATE TABLE IF NOT EXISTS audit_logs (
                 id INT AUTO_INCREMENT PRIMARY KEY,
+                event_id VARCHAR(50) NULL,
                 case_id INT NULL,
-                user_id INT NOT NULL,
+                user_id INT NULL,
+                actor_id VARCHAR(50) NULL,
+                actor_role VARCHAR(50) NULL,
                 action VARCHAR(100) NOT NULL,
+                module VARCHAR(50) NOT NULL DEFAULT 'System',
+                target_type VARCHAR(50) NULL,
+                target_id VARCHAR(100) NULL,
+                severity VARCHAR(20) NOT NULL DEFAULT 'INFO',
+                status VARCHAR(20) NOT NULL DEFAULT 'SUCCESS',
                 description TEXT NULL,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (case_id) REFERENCES investigation_cases(id) ON DELETE CASCADE,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
             ) ENGINE=InnoDB;
         """))
+
+        # Add missing columns to audit_logs if table already exists
+        audit_cols = [
+            ("event_id", "VARCHAR(50) NULL"),
+            ("actor_id", "VARCHAR(50) NULL"),
+            ("actor_role", "VARCHAR(50) NULL"),
+            ("module", "VARCHAR(50) NOT NULL DEFAULT 'System'"),
+            ("target_type", "VARCHAR(50) NULL"),
+            ("target_id", "VARCHAR(100) NULL"),
+            ("severity", "VARCHAR(20) NOT NULL DEFAULT 'INFO'"),
+            ("status", "VARCHAR(20) NOT NULL DEFAULT 'SUCCESS'")
+        ]
+        for col_name, col_def in audit_cols:
+            res_col = db.execute(text(f"SHOW COLUMNS FROM audit_logs LIKE '{col_name}'")).fetchone()
+            if not res_col:
+                db.execute(text(f"ALTER TABLE audit_logs ADD COLUMN {col_name} {col_def}"))
+
+        try:
+            db.execute(text("ALTER TABLE audit_logs MODIFY COLUMN user_id INT NULL"))
+        except Exception:
+            pass
 
         # Create case_messages table if not exists
         db.execute(text("""
@@ -434,11 +463,282 @@ def seed_investigation_cases():
     finally:
         db.close()
 
+def seed_synthetic_audit_logs():
+    db = SessionLocal()
+    try:
+        from app.models.models import AuditLog
+        from datetime import datetime, timezone, timedelta
+        
+        count = db.query(AuditLog).filter(AuditLog.event_id != None).count()
+        if count < 10:
+            now = datetime.now(timezone.utc)
+            synthetic_events = [
+                {
+                    "event_id": "AUD-2026-004281",
+                    "actor_id": "INV-023",
+                    "actor_role": "Investigator",
+                    "action": "CASE_STATUS_CHANGED",
+                    "module": "Cases",
+                    "target_type": "Case",
+                    "target_id": "CASE-00421",
+                    "severity": "INFO",
+                    "status": "SUCCESS",
+                    "description": "Case status changed.",
+                    "timestamp": now - timedelta(minutes=5)
+                },
+                {
+                    "event_id": "AUD-2026-004280",
+                    "actor_id": "SENTINEL_AI",
+                    "actor_role": "Sentinel AI",
+                    "action": "AI_ANALYSIS_COMPLETED",
+                    "module": "AI",
+                    "target_type": "Evidence",
+                    "target_id": "EVD-00912",
+                    "severity": "INFO",
+                    "status": "SUCCESS",
+                    "description": "AI risk assessment completed.",
+                    "timestamp": now - timedelta(minutes=45)
+                },
+                {
+                    "event_id": "AUD-2026-004279",
+                    "actor_id": "USR-0041",
+                    "actor_role": "User",
+                    "action": "LOGIN_SUCCESS",
+                    "module": "Authentication",
+                    "target_type": "User",
+                    "target_id": "USR-0041",
+                    "severity": "INFO",
+                    "status": "SUCCESS",
+                    "description": "Successful login.",
+                    "timestamp": now - timedelta(hours=2)
+                },
+                {
+                    "event_id": "AUD-2026-004278",
+                    "actor_id": "UNK-0000",
+                    "actor_role": "User",
+                    "action": "LOGIN_FAILED",
+                    "module": "Authentication",
+                    "target_type": "User",
+                    "target_id": "AUTH-REQ",
+                    "severity": "WARNING",
+                    "status": "FAILED",
+                    "description": "Failed login attempt.",
+                    "timestamp": now - timedelta(hours=3, minutes=15)
+                },
+                {
+                    "event_id": "AUD-2026-004277",
+                    "actor_id": "ADM-001",
+                    "actor_role": "Admin",
+                    "action": "USER_ROLE_CHANGED",
+                    "module": "Permissions",
+                    "target_type": "User",
+                    "target_id": "USR-0182",
+                    "severity": "HIGH",
+                    "status": "SUCCESS",
+                    "description": "User role changed.",
+                    "timestamp": now - timedelta(hours=4, minutes=10)
+                },
+                {
+                    "event_id": "AUD-2026-004276",
+                    "actor_id": "INV-014",
+                    "actor_role": "Investigator",
+                    "action": "AI_DECISION_OVERRIDDEN",
+                    "module": "AI",
+                    "target_type": "Analysis",
+                    "target_id": "AI-9912",
+                    "severity": "HIGH",
+                    "status": "SUCCESS",
+                    "description": "AI assessment manually overridden.",
+                    "timestamp": now - timedelta(hours=5, minutes=30)
+                },
+                {
+                    "event_id": "AUD-2026-004275",
+                    "actor_id": "SENTINEL_AI",
+                    "actor_role": "Sentinel AI",
+                    "action": "ALERT_ESCALATED",
+                    "module": "System Alerts",
+                    "target_type": "Alert",
+                    "target_id": "ALT-2026-88",
+                    "severity": "HIGH",
+                    "status": "SUCCESS",
+                    "description": "System alert escalated.",
+                    "timestamp": now - timedelta(hours=7, minutes=20)
+                },
+                {
+                    "event_id": "AUD-2026-004274",
+                    "actor_id": "ADM-001",
+                    "actor_role": "Superuser",
+                    "action": "SECURITY_SETTING_CHANGED",
+                    "module": "Configuration",
+                    "target_type": "System",
+                    "target_id": "CFG-SEC-01",
+                    "severity": "HIGH",
+                    "status": "SUCCESS",
+                    "description": "Security threshold updated.",
+                    "timestamp": now - timedelta(hours=9)
+                },
+                {
+                    "event_id": "AUD-2026-004273",
+                    "actor_id": "SENTINEL_AI",
+                    "actor_role": "Sentinel AI",
+                    "action": "AI_ANALYSIS_FAILED",
+                    "module": "AI",
+                    "target_type": "Evidence",
+                    "target_id": "EVD-00814",
+                    "severity": "WARNING",
+                    "status": "FAILED",
+                    "description": "AI analysis failed.",
+                    "timestamp": now - timedelta(hours=11)
+                },
+                {
+                    "event_id": "AUD-2026-004272",
+                    "actor_id": "INV-009",
+                    "actor_role": "Investigator",
+                    "action": "CASE_ASSIGNED",
+                    "module": "Cases",
+                    "target_type": "Case",
+                    "target_id": "CASE-00422",
+                    "severity": "INFO",
+                    "status": "SUCCESS",
+                    "description": "Case assigned to investigator.",
+                    "timestamp": now - timedelta(hours=14)
+                },
+                {
+                    "event_id": "AUD-2026-004271",
+                    "actor_id": "USR-0055",
+                    "actor_role": "User",
+                    "action": "CASE_CREATED",
+                    "module": "Cases",
+                    "target_type": "Case",
+                    "target_id": "CASE-00422",
+                    "severity": "INFO",
+                    "status": "SUCCESS",
+                    "description": "Case created.",
+                    "timestamp": now - timedelta(hours=16)
+                },
+                {
+                    "event_id": "AUD-2026-004270",
+                    "actor_id": "ADM-001",
+                    "actor_role": "Admin",
+                    "action": "USER_ACTIVATED",
+                    "module": "User Management",
+                    "target_type": "User",
+                    "target_id": "USR-0201",
+                    "severity": "INFO",
+                    "status": "SUCCESS",
+                    "description": "User activated.",
+                    "timestamp": now - timedelta(hours=20)
+                },
+                {
+                    "event_id": "AUD-2026-004269",
+                    "actor_id": "USR-0099",
+                    "actor_role": "User",
+                    "action": "ACCESS_DENIED",
+                    "module": "Permissions",
+                    "target_type": "Resource",
+                    "target_id": "RES-ADMIN",
+                    "severity": "CRITICAL",
+                    "status": "FAILED",
+                    "description": "Permission denied for unauthorized resource access.",
+                    "timestamp": now - timedelta(days=1, hours=2)
+                },
+                {
+                    "event_id": "AUD-2026-004268",
+                    "actor_id": "ADM-001",
+                    "actor_role": "Superuser",
+                    "action": "AI_THRESHOLD_CHANGED",
+                    "module": "Configuration",
+                    "target_type": "Config",
+                    "target_id": "CFG-AI-THRESH",
+                    "severity": "HIGH",
+                    "status": "SUCCESS",
+                    "description": "AI risk threshold changed.",
+                    "timestamp": now - timedelta(days=1, hours=5)
+                },
+                {
+                    "event_id": "AUD-2026-004267",
+                    "actor_id": "USR-0033",
+                    "actor_role": "User",
+                    "action": "PASSWORD_RESET_REQUESTED",
+                    "module": "Authentication",
+                    "target_type": "User",
+                    "target_id": "USR-0033",
+                    "severity": "INFO",
+                    "status": "SUCCESS",
+                    "description": "Password reset requested.",
+                    "timestamp": now - timedelta(days=1, hours=8)
+                },
+                {
+                    "event_id": "AUD-2026-004266",
+                    "actor_id": "INV-023",
+                    "actor_role": "Investigator",
+                    "action": "CASE_CLOSED",
+                    "module": "Cases",
+                    "target_type": "Case",
+                    "target_id": "CASE-00410",
+                    "severity": "INFO",
+                    "status": "SUCCESS",
+                    "description": "Case closed.",
+                    "timestamp": now - timedelta(days=2)
+                },
+                {
+                    "event_id": "AUD-2026-004265",
+                    "actor_id": "ADM-001",
+                    "actor_role": "Admin",
+                    "action": "INVESTIGATOR_CREATED",
+                    "module": "Investigator Management",
+                    "target_type": "Investigator",
+                    "target_id": "INV-045",
+                    "severity": "INFO",
+                    "status": "SUCCESS",
+                    "description": "Investigator created.",
+                    "timestamp": now - timedelta(days=2, hours=4)
+                },
+                {
+                    "event_id": "AUD-2026-004264",
+                    "actor_id": "SENTINEL_AI",
+                    "actor_role": "Sentinel AI",
+                    "action": "ACCOUNT_LOCKED",
+                    "module": "Authentication",
+                    "target_type": "User",
+                    "target_id": "USR-0089",
+                    "severity": "WARNING",
+                    "status": "SUCCESS",
+                    "description": "Account locked.",
+                    "timestamp": now - timedelta(days=3)
+                }
+            ]
+
+            for ev in synthetic_events:
+                existing = db.query(AuditLog).filter(AuditLog.event_id == ev["event_id"]).first()
+                if not existing:
+                    log_item = AuditLog(
+                        event_id=ev["event_id"],
+                        actor_id=ev["actor_id"],
+                        actor_role=ev["actor_role"],
+                        action=ev["action"],
+                        module=ev["module"],
+                        target_type=ev["target_type"],
+                        target_id=ev["target_id"],
+                        severity=ev["severity"],
+                        status=ev["status"],
+                        description=ev["description"],
+                        timestamp=ev["timestamp"]
+                    )
+                    db.add(log_item)
+            db.commit()
+    except Exception as e:
+        print("Database audit logs seeding error:", e)
+        db.rollback()
+    finally:
+        db.close()
+
 # Run database configuration updates and seed initial roles/users/models
 init_db_updates()
 seed_roles_and_users()
 seed_ai_models()
 seed_investigation_cases()
+seed_synthetic_audit_logs()
 
 app = FastAPI(title="Sentinel AI API")
 
