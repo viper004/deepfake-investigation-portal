@@ -615,7 +615,7 @@ export default function AdminDashboard() {
     );
   };
 
-  const getStatusBadge = (statusStr: string) => {
+  const getAuditStatusBadge = (statusStr: string) => {
     const s = (statusStr || "").toUpperCase();
     if (s === "SUCCESS") {
       return (
@@ -2348,10 +2348,356 @@ export default function AdminDashboard() {
           )}
 
           {activeSidebarTab === "Audit Logs" && (
-            <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm p-12 text-center text-[#0a0a0a]/50">
-              <FileText className="h-12 w-12 mx-auto mb-4 text-[#0a0a0a]/30" />
-              <h2 className="text-lg font-semibold text-[#0a0a0a]/70">Audit Logs</h2>
-              <p className="mt-1 text-sm">Audit logs table is currently under construction.</p>
+            <div className="space-y-6 animate-slide-in">
+              {/* Header / Subtitle Bar */}
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-6 rounded-lg border border-[#e5e5e5] shadow-sm">
+                <div>
+                  <h2 className="text-xl font-bold text-[#0a0a0a]">System Audit Trail</h2>
+                  <p className="text-xs text-[#0a0a0a]/60 mt-1">
+                    Privacy-first, immutable administrative & investigation security logs. Minimum-data storage policy enforced.
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={handleExportAuditCSV}
+                    disabled={auditLogs.length === 0}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded shadow-sm transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Download className="w-3.5 h-3.5" /> Export CSV
+                  </button>
+                </div>
+              </div>
+
+              {/* Filters & Search Toolbar */}
+              <div className="bg-white border border-[#e5e5e5] rounded-lg p-5 shadow-sm space-y-4">
+                <div className="flex flex-col lg:flex-row items-center justify-between gap-4">
+                  {/* Search Field */}
+                  <div className="relative w-full lg:w-96">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#0a0a0a]/40" />
+                    <input
+                      type="text"
+                      placeholder="Search logs, users..."
+                      value={auditSearch}
+                      onChange={(e) => {
+                        setAuditSearch(e.target.value);
+                        setAuditLogsPage(1);
+                      }}
+                      className="w-full pl-9 pr-8 py-2 bg-[#fafafa] border border-[#e5e5e5] rounded-md text-xs text-[#0a0a0a] focus:outline-none focus:ring-2 focus:ring-[#CC2200]/20 focus:border-[#CC2200] transition-all"
+                    />
+                    {auditSearch && (
+                      <button
+                        onClick={() => {
+                          setAuditSearch("");
+                          setAuditLogsPage(1);
+                        }}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Per Page Limit & Sort */}
+                  <div className="flex items-center gap-3 w-full lg:w-auto justify-end">
+                    <div className="flex items-center gap-2 text-xs text-[#0a0a0a]/60">
+                      <span className="font-semibold">Sort:</span>
+                      <select
+                        value={`${auditSortBy}:${auditSortOrder}`}
+                        onChange={(e) => {
+                          const [by, order] = e.target.value.split(":");
+                          setAuditSortBy(by);
+                          setAuditSortOrder(order as "asc" | "desc");
+                          setAuditLogsPage(1);
+                        }}
+                        className="px-2.5 py-1.5 bg-[#fafafa] border border-[#e5e5e5] rounded text-xs font-semibold text-[#0a0a0a] focus:outline-none"
+                      >
+                        <option value="timestamp:desc">Newest First</option>
+                        <option value="timestamp:asc">Oldest First</option>
+                        <option value="severity:desc">Highest Severity</option>
+                        <option value="module:asc">Module (A-Z)</option>
+                      </select>
+                    </div>
+
+                    <div className="flex items-center gap-2 text-xs text-[#0a0a0a]/60">
+                      <span className="font-semibold">Show:</span>
+                      <select
+                        value={auditLogsLimit}
+                        onChange={(e) => {
+                          setAuditLogsLimit(Number(e.target.value));
+                          setAuditLogsPage(1);
+                        }}
+                        className="px-2 py-1.5 bg-[#fafafa] border border-[#e5e5e5] rounded text-xs font-semibold text-[#0a0a0a] focus:outline-none"
+                      >
+                        <option value={10}>10</option>
+                        <option value={25}>25</option>
+                        <option value={50}>50</option>
+                        <option value={100}>100</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Filter Selects Grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 pt-3 border-t border-[#f0f0f0]">
+                  {/* Module Filter */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-[#0a0a0a]/50 uppercase mb-1">Module</label>
+                    <select
+                      value={auditModuleFilter}
+                      onChange={(e) => {
+                        setAuditModuleFilter(e.target.value);
+                        setAuditLogsPage(1);
+                      }}
+                      className="w-full px-2.5 py-1.5 bg-[#fafafa] border border-[#e5e5e5] rounded text-xs font-medium text-[#0a0a0a] focus:outline-none focus:border-[#CC2200]"
+                    >
+                      <option value="ALL">All Modules</option>
+                      <option value="Authentication">Authentication</option>
+                      <option value="User Management">User Management</option>
+                      <option value="Investigator Management">Investigator Management</option>
+                      <option value="Cases">Cases</option>
+                      <option value="AI">AI</option>
+                      <option value="System Alerts">System Alerts</option>
+                      <option value="Configuration">Configuration</option>
+                      <option value="Permissions">Permissions</option>
+                    </select>
+                  </div>
+
+                  {/* Severity Filter */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-[#0a0a0a]/50 uppercase mb-1">Severity</label>
+                    <select
+                      value={auditSeverityFilter}
+                      onChange={(e) => {
+                        setAuditSeverityFilter(e.target.value);
+                        setAuditLogsPage(1);
+                      }}
+                      className="w-full px-2.5 py-1.5 bg-[#fafafa] border border-[#e5e5e5] rounded text-xs font-medium text-[#0a0a0a] focus:outline-none focus:border-[#CC2200]"
+                    >
+                      <option value="ALL">All Severities</option>
+                      <option value="INFO">INFO</option>
+                      <option value="WARNING">WARNING</option>
+                      <option value="HIGH">HIGH</option>
+                      <option value="CRITICAL">CRITICAL</option>
+                    </select>
+                  </div>
+
+                  {/* Status Filter */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-[#0a0a0a]/50 uppercase mb-1">Status</label>
+                    <select
+                      value={auditStatusFilter}
+                      onChange={(e) => {
+                        setAuditStatusFilter(e.target.value);
+                        setAuditLogsPage(1);
+                      }}
+                      className="w-full px-2.5 py-1.5 bg-[#fafafa] border border-[#e5e5e5] rounded text-xs font-medium text-[#0a0a0a] focus:outline-none focus:border-[#CC2200]"
+                    >
+                      <option value="ALL">All Statuses</option>
+                      <option value="SUCCESS">SUCCESS</option>
+                      <option value="FAILED">FAILED</option>
+                    </select>
+                  </div>
+
+                  {/* Actor Role Filter */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-[#0a0a0a]/50 uppercase mb-1">Actor Role</label>
+                    <select
+                      value={auditRoleFilter}
+                      onChange={(e) => {
+                        setAuditRoleFilter(e.target.value);
+                        setAuditLogsPage(1);
+                      }}
+                      className="w-full px-2.5 py-1.5 bg-[#fafafa] border border-[#e5e5e5] rounded text-xs font-medium text-[#0a0a0a] focus:outline-none focus:border-[#CC2200]"
+                    >
+                      <option value="ALL">All Roles</option>
+                      <option value="Superuser">Superuser</option>
+                      <option value="Admin">Admin</option>
+                      <option value="Investigator">Investigator</option>
+                      <option value="User">User</option>
+                      <option value="Sentinel AI">Sentinel AI</option>
+                    </select>
+                  </div>
+
+                  {/* Reset Filters */}
+                  <div className="flex items-end">
+                    <button
+                      onClick={() => {
+                        setAuditSearch("");
+                        setAuditModuleFilter("ALL");
+                        setAuditActionFilter("ALL");
+                        setAuditSeverityFilter("ALL");
+                        setAuditStatusFilter("ALL");
+                        setAuditRoleFilter("ALL");
+                        setAuditSortBy("timestamp");
+                        setAuditSortOrder("desc");
+                        setAuditLogsPage(1);
+                      }}
+                      className="w-full py-1.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded transition-colors text-center"
+                    >
+                      Reset Filters
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Table / Loader / Error / Empty States */}
+              <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm overflow-hidden">
+                {auditLogsLoading ? (
+                  /* Loading Skeleton State */
+                  <div className="divide-y divide-[#f0f0f0]">
+                    <div className="bg-[#fafafa] px-6 py-3 border-b border-[#e5e5e5] grid grid-cols-8 gap-4 text-[11px] font-bold uppercase tracking-wider text-[#0a0a0a]/50">
+                      <span>Timestamp</span>
+                      <span>Event ID</span>
+                      <span>Actor</span>
+                      <span>Role</span>
+                      <span>Action</span>
+                      <span>Module</span>
+                      <span>Severity</span>
+                      <span className="text-right">Details</span>
+                    </div>
+                    {Array.from({ length: 6 }).map((_, i) => (
+                      <div key={i} className="px-6 py-4 grid grid-cols-8 gap-4 items-center animate-pulse">
+                        <div className="h-4 bg-slate-200 rounded w-24"></div>
+                        <div className="h-4 bg-slate-200 rounded w-20"></div>
+                        <div className="h-4 bg-slate-200 rounded w-16"></div>
+                        <div className="h-4 bg-slate-200 rounded w-16"></div>
+                        <div className="h-4 bg-slate-200 rounded w-28"></div>
+                        <div className="h-4 bg-slate-200 rounded w-16"></div>
+                        <div className="h-5 bg-slate-200 rounded-full w-14"></div>
+                        <div className="h-4 bg-slate-200 rounded w-8 ml-auto"></div>
+                      </div>
+                    ))}
+                  </div>
+                ) : auditLogsError ? (
+                  /* Error State */
+                  <div className="p-12 text-center text-[#0a0a0a]/50">
+                    <AlertCircle className="h-12 w-12 mx-auto mb-3 text-amber-500" />
+                    <h3 className="text-base font-bold text-[#0a0a0a]/80">Unable to load audit logs</h3>
+                    <p className="text-xs text-[#0a0a0a]/50 mt-1 mb-4">
+                      A network error occurred while connecting to the audit logging service.
+                    </p>
+                    <button
+                      onClick={() => fetchAuditLogs(true)}
+                      className="px-4 py-2 bg-[#CC2200] text-white rounded text-xs font-bold hover:bg-[#b31e00] transition-colors shadow-sm"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : auditLogs.length === 0 ? (
+                  /* Empty State */
+                  <div className="p-12 text-center text-[#0a0a0a]/50">
+                    <FileText className="h-12 w-12 mx-auto mb-4 text-[#0a0a0a]/30" />
+                    <h3 className="text-base font-bold text-[#0a0a0a]/80">No audit events found</h3>
+                    <p className="text-xs text-[#0a0a0a]/50 mt-1">
+                      {auditSearch || auditModuleFilter !== "ALL" || auditSeverityFilter !== "ALL" || auditStatusFilter !== "ALL" || auditRoleFilter !== "ALL"
+                        ? "No audit logs match your search or filter criteria. Try adjusting your filters."
+                        : "No audit events have been recorded yet."}
+                    </p>
+                  </div>
+                ) : (
+                  /* Main Audit Table */
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm whitespace-nowrap">
+                      <thead className="bg-[#fafafa] text-[#0a0a0a]/50 uppercase text-[11px] font-bold tracking-wider border-b border-[#e5e5e5]">
+                        <tr>
+                          <th className="py-3.5 px-6">Timestamp</th>
+                          <th className="py-3.5 px-6">Actor</th>
+                          <th className="py-3.5 px-6">Role</th>
+                          <th className="py-3.5 px-6">Action</th>
+                          <th className="py-3.5 px-6">Module</th>
+                          <th className="py-3.5 px-6">Target</th>
+                          <th className="py-3.5 px-6">Severity</th>
+                          <th className="py-3.5 px-6">Status</th>
+                          <th className="py-3.5 px-6 text-right">Details</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#f0f0f0] bg-white">
+                        {auditLogs.map((log) => (
+                          <tr
+                            key={log.id}
+                            onClick={() => {
+                              setSelectedAuditLog(log);
+                              setIsAuditDrawerOpen(true);
+                            }}
+                            className="hover:bg-[#fafafa] cursor-pointer transition-colors"
+                          >
+                            <td className="py-3.5 px-6 text-xs text-[#0a0a0a]/70 font-medium">
+                              {formatDate(log.timestamp)}
+                            </td>
+                            <td className="py-3.5 px-6 font-semibold text-[#0a0a0a]">
+                              {log.actor}
+                            </td>
+                            <td className="py-3.5 px-6 text-xs text-[#0a0a0a]/70">
+                              {log.actor_role}
+                            </td>
+                            <td className="py-3.5 px-6 font-medium text-[#0a0a0a]">
+                              {log.action_display || log.action}
+                            </td>
+                            <td className="py-3.5 px-6 text-xs text-[#0a0a0a]/70">
+                              {log.module}
+                            </td>
+                            <td className="py-3.5 px-6 font-mono text-xs text-[#0a0a0a]/80">
+                              {log.target}
+                            </td>
+                            <td className="py-3.5 px-6">
+                              {getSeverityBadge(log.severity)}
+                            </td>
+                            <td className="py-3.5 px-6">
+                              {getAuditStatusBadge(log.status)}
+                            </td>
+                            <td className="py-3.5 px-6 text-right">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedAuditLog(log);
+                                  setIsAuditDrawerOpen(true);
+                                }}
+                                className="p-1 text-[#0a0a0a]/40 hover:text-[#CC2200] transition-colors"
+                                title="View Safe Audit Details"
+                              >
+                                <Eye className="w-4 h-4" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* Pagination Controls */}
+                {!auditLogsLoading && !auditLogsError && auditLogs.length > 0 && (
+                  <div className="px-6 py-4 border-t border-[#e5e5e5] bg-[#fafafa] flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <div className="text-xs text-[#0a0a0a]/60">
+                      Showing <strong className="font-semibold text-[#0a0a0a]">{((auditLogsPage - 1) * auditLogsLimit) + 1}</strong> to{" "}
+                      <strong className="font-semibold text-[#0a0a0a]">{Math.min(auditLogsPage * auditLogsLimit, auditLogsTotal)}</strong> of{" "}
+                      <strong className="font-semibold text-[#0a0a0a]">{auditLogsTotal.toLocaleString()}</strong> events
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setAuditLogsPage((prev) => Math.max(1, prev - 1))}
+                        disabled={auditLogsPage === 1}
+                        className="px-3 py-1.5 bg-white border border-[#e5e5e5] rounded text-xs font-semibold text-[#0a0a0a] hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" /> Previous
+                      </button>
+
+                      <span className="text-xs font-semibold px-2 text-[#0a0a0a]/70">
+                        Page {auditLogsPage} of {auditLogsTotalPages}
+                      </span>
+
+                      <button
+                        onClick={() => setAuditLogsPage((prev) => Math.min(auditLogsTotalPages, prev + 1))}
+                        disabled={auditLogsPage >= auditLogsTotalPages}
+                        className="px-3 py-1.5 bg-white border border-[#e5e5e5] rounded text-xs font-semibold text-[#0a0a0a] hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
+                      >
+                        Next <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -3017,6 +3363,67 @@ export default function AdminDashboard() {
 
 
 
+
+      {/* Audit Log Details Drawer */}
+      <div className={`fixed inset-y-0 right-0 w-full max-w-md bg-white shadow-2xl z-[150] transform transition-transform duration-300 ease-in-out ${isAuditDrawerOpen ? "translate-x-0" : "translate-x-full"} flex flex-col border-l border-[#e5e5e5]`}>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[#e5e5e5] bg-slate-50">
+          <div>
+            <h2 className="text-lg font-bold text-[#0a0a0a]">Audit Event Details</h2>
+            <p className="text-xs text-[#0a0a0a]/50 font-mono">Reference: {selectedAuditLog?.event_id || selectedAuditLog?.id}</p>
+          </div>
+          <button onClick={() => setIsAuditDrawerOpen(false)} className="p-2 hover:bg-[#e5e5e5] rounded-full transition-colors text-[#0a0a0a]/50">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-6 space-y-6 text-sm">
+          {selectedAuditLog && (
+            <>
+              {/* Event Overview */}
+              <div>
+                <h3 className="text-xs font-bold uppercase text-[#0a0a0a]/40 mb-3 tracking-wider">Event Overview</h3>
+                <div className="space-y-3 bg-[#fafafa] p-4 rounded-lg border border-[#e5e5e5]">
+                  <div className="flex justify-between items-center"><span className="text-xs font-medium text-[#0a0a0a]/60">Event ID</span><span className="text-xs font-mono font-bold text-[#CC2200]">{selectedAuditLog.event_id || selectedAuditLog.id}</span></div>
+                  <div className="flex justify-between items-center"><span className="text-xs font-medium text-[#0a0a0a]/60">Timestamp</span><span className="text-xs font-semibold text-[#0a0a0a]">{formatDate(selectedAuditLog.timestamp)}</span></div>
+                  <div className="flex justify-between items-center"><span className="text-xs font-medium text-[#0a0a0a]/60">Module</span><span className="text-xs font-bold text-[#0a0a0a]">{selectedAuditLog.module}</span></div>
+                  <div className="flex justify-between items-center"><span className="text-xs font-medium text-[#0a0a0a]/60">Severity</span><div>{getSeverityBadge(selectedAuditLog.severity)}</div></div>
+                  <div className="flex justify-between items-center"><span className="text-xs font-medium text-[#0a0a0a]/60">Outcome Status</span><div>{getAuditStatusBadge(selectedAuditLog.status)}</div></div>
+                </div>
+              </div>
+
+              {/* Actor & Action Details */}
+              <div>
+                <h3 className="text-xs font-bold uppercase text-[#0a0a0a]/40 mb-3 tracking-wider">Actor & Action Details</h3>
+                <div className="space-y-3 bg-[#fafafa] p-4 rounded-lg border border-[#e5e5e5]">
+                  <div className="flex justify-between items-center"><span className="text-xs font-medium text-[#0a0a0a]/60">Actor Identity</span><span className="text-xs font-bold text-[#0a0a0a]">{selectedAuditLog.actor}</span></div>
+                  <div className="flex justify-between items-center"><span className="text-xs font-medium text-[#0a0a0a]/60">Actor Role</span><span className="text-xs font-semibold text-[#0a0a0a]">{selectedAuditLog.actor_role}</span></div>
+                  <div className="flex justify-between items-center"><span className="text-xs font-medium text-[#0a0a0a]/60">Action Event</span><span className="text-xs font-bold text-[#0a0a0a]">{selectedAuditLog.action_display || selectedAuditLog.action}</span></div>
+                  <div className="flex justify-between items-center"><span className="text-xs font-medium text-[#0a0a0a]/60">Target Identifier</span><span className="text-xs font-mono text-[#0a0a0a]">{selectedAuditLog.target}</span></div>
+                </div>
+              </div>
+
+              {/* Safe Human Description */}
+              <div>
+                <h3 className="text-xs font-bold uppercase text-[#0a0a0a]/40 mb-3 tracking-wider">Privacy-Safe Summary</h3>
+                <div className="bg-[#fafafa] p-4 rounded-lg border border-[#e5e5e5]">
+                  <p className="text-xs text-[#0a0a0a]/80 leading-relaxed font-medium">
+                    {selectedAuditLog.description || "System audit event executed and verified."}
+                  </p>
+                </div>
+              </div>
+
+              {/* Immutability & Privacy Policy Banner */}
+              <div className="bg-slate-50 p-4 rounded-lg border border-[#e5e5e5] text-xs text-[#0a0a0a]/60 space-y-1">
+                <div className="font-bold text-[#0a0a0a]/80 flex items-center gap-1.5">
+                  <CheckCircle className="w-3.5 h-3.5 text-emerald-600" /> Privacy-First Audit Policy
+                </div>
+                <p className="text-[11px] leading-normal text-[#0a0a0a]/60">
+                  This log is immutable and append-only. Passwords, session tokens, private case content, and AI prompts are strictly excluded by system architecture.
+                </p>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
 
     </div>
   );
