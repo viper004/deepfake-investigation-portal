@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.database.database import SessionLocal
 from app.models.user import User, InvestigatorInvitation, AccountRole, InvitationLog
-from app.models.models import Role
+from app.models.models import Role, AuditLog
 from app.schemas.user import UserResponse
 from app.utils.auth import SECRET_KEY, ALGORITHM
 from app.services.email_service import send_investigator_invitation_email
@@ -447,5 +447,125 @@ def notify_user(db: Session, user_id: int, title: str, message: str):
         db.commit()
     except Exception as e:
         print("Failed to send notification:", e)
+
+
+@router.get("/audit-logs")
+def get_audit_logs(
+    search: Optional[str] = None,
+    module: Optional[str] = None,
+    action: Optional[str] = None,
+    severity: Optional[str] = None,
+    status_filter: Optional[str] = None,
+    actor_role: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    sort_by: Optional[str] = "timestamp",
+    sort_order: Optional[str] = "desc",
+    page: int = 1,
+    limit: int = 25,
+    db: Session = Depends(get_db),
+    admin: dict = Depends(get_current_admin)
+):
+    query = db.query(AuditLog)
+
+    # 1. Search filter across safe metadata
+    if search:
+        search_term = f"%{search.strip()}%"
+        query = query.filter(
+            or_(
+                AuditLog.event_id.like(search_term),
+                AuditLog.action.like(search_term),
+                AuditLog.module.like(search_term),
+                AuditLog.actor_id.like(search_term),
+                AuditLog.actor_role.like(search_term),
+                AuditLog.target_id.like(search_term),
+                AuditLog.description.like(search_term)
+            )
+        )
+
+    # 2. Module filter
+    if module and module != "ALL":
+        query = query.filter(AuditLog.module == module)
+
+    # 3. Action filter
+    if action and action != "ALL":
+        query = query.filter(AuditLog.action == action)
+
+    # 4. Severity filter
+    if severity and severity != "ALL":
+        query = query.filter(AuditLog.severity == severity.upper())
+
+    # 5. Status filter
+    if status_filter and status_filter != "ALL":
+        query = query.filter(AuditLog.status == status_filter.upper())
+
+    # 6. Actor Role filter
+    if actor_role and actor_role != "ALL":
+        query = query.filter(AuditLog.actor_role == actor_role)
+
+    # 7. Date range filter
+    if start_date:
+        try:
+            s_dt = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+            query = query.filter(AuditLog.timestamp >= s_dt)
+        except Exception:
+            pass
+
+    if end_date:
+        try:
+            e_dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+            query = query.filter(AuditLog.timestamp <= e_dt)
+        except Exception:
+            pass
+
+    # 8. Sorting
+    sort_column = getattr(AuditLog, sort_by if hasattr(AuditLog, sort_by) else "timestamp")
+    if sort_order.lower() == "asc":
+        query = query.order_by(sort_column.asc())
+    else:
+        query = query.order_by(sort_column.desc())
+
+    total = query.count()
+    total_pages = max(1, (total + limit - 1) // limit)
+    offset = (page - 1) * limit
+    logs = query.offset(offset).limit(limit).all()
+
+    logs_list = []
+    for l in logs:
+        # Format event_id
+        event_id = l.event_id or f"AUD-2026-{l.id:06d}"
+        
+        target_display = l.target_id or (f"CASE-{l.case_id}" if l.case_id else "System")
+
+        # Safe human action display
+        action_display = l.action.replace("_", " ").title()
+
+        logs_list.append({
+            "id": event_id,
+            "raw_id": l.id,
+            "event_id": event_id,
+            "timestamp": l.timestamp.isoformat() if l.timestamp else None,
+            "actor": l.actor_role or "System",
+            "actor_id": l.actor_id or (f"USR-{l.user_id}" if l.user_id else "SYSTEM"),
+            "actor_role": l.actor_role or (l.user.role.role_name if l.user and l.user.role else "System"),
+            "action": l.action,
+            "action_display": action_display,
+            "module": l.module or "System",
+            "target": target_display,
+            "target_type": l.target_type or ("Case" if l.case_id else "System"),
+            "target_id": l.target_id or (f"CASE-{l.case_id}" if l.case_id else "SYS-001"),
+            "severity": l.severity or "INFO",
+            "status": l.status or "SUCCESS",
+            "description": l.description or f"{action_display} recorded."
+        })
+
+    return {
+        "logs": logs_list,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": total_pages
+    }
+
 
 

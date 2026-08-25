@@ -115,6 +115,26 @@ export default function AdminDashboard() {
   const [adminCaseDetail, setAdminCaseDetail] = useState<any | null>(null);
   const [adminCaseDetailLoading, setAdminCaseDetailLoading] = useState(false);
   
+  // Audit Logs State
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [auditLogsTotal, setAuditLogsTotal] = useState(0);
+  const [auditLogsLoading, setAuditLogsLoading] = useState(false);
+  const [auditLogsLoaded, setAuditLogsLoaded] = useState(false);
+  const [auditLogsError, setAuditLogsError] = useState(false);
+  const [auditLogsPage, setAuditLogsPage] = useState(1);
+  const [auditLogsLimit, setAuditLogsLimit] = useState(25);
+  const [auditLogsTotalPages, setAuditLogsTotalPages] = useState(1);
+  const [auditSearch, setAuditSearch] = useState("");
+  const [auditModuleFilter, setAuditModuleFilter] = useState("ALL");
+  const [auditActionFilter, setAuditActionFilter] = useState("ALL");
+  const [auditSeverityFilter, setAuditSeverityFilter] = useState("ALL");
+  const [auditStatusFilter, setAuditStatusFilter] = useState("ALL");
+  const [auditRoleFilter, setAuditRoleFilter] = useState("ALL");
+  const [auditSortBy, setAuditSortBy] = useState("timestamp");
+  const [auditSortOrder, setAuditSortOrder] = useState<"asc" | "desc">("desc");
+  const [selectedAuditLog, setSelectedAuditLog] = useState<any | null>(null);
+  const [isAuditDrawerOpen, setIsAuditDrawerOpen] = useState(false);
+  
   const handleSelectLog = (id: number) => {
     setSelectedLogs(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   };
@@ -504,6 +524,113 @@ export default function AdminDashboard() {
     }
   }, [session?.accessToken, showToast]);
 
+  // Fetch Audit Logs
+  const fetchAuditLogs = useCallback(async (force = false) => {
+    if (!session?.accessToken) return;
+    if (auditLogsLoaded && !force) return;
+    try {
+      setAuditLogsLoading(true);
+      setAuditLogsError(false);
+
+      const params = new URLSearchParams({
+        page: auditLogsPage.toString(),
+        limit: auditLogsLimit.toString(),
+        sort_by: auditSortBy,
+        sort_order: auditSortOrder
+      });
+
+      if (auditSearch.trim()) params.append("search", auditSearch.trim());
+      if (auditModuleFilter !== "ALL") params.append("module", auditModuleFilter);
+      if (auditActionFilter !== "ALL") params.append("action", auditActionFilter);
+      if (auditSeverityFilter !== "ALL") params.append("severity", auditSeverityFilter);
+      if (auditStatusFilter !== "ALL") params.append("status_filter", auditStatusFilter);
+      if (auditRoleFilter !== "ALL") params.append("actor_role", auditRoleFilter);
+
+      const res = await fetch(`${BACKEND_URL}/api/admin/audit-logs?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${session.accessToken}` }
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setAuditLogs(data.logs || []);
+        setAuditLogsTotal(data.total || 0);
+        setAuditLogsTotalPages(data.total_pages || 1);
+        setAuditLogsLoaded(true);
+        setAuditLogsError(false);
+      } else {
+        setAuditLogsError(true);
+      }
+    } catch (err) {
+      console.error("Failed to load audit logs:", err);
+      setAuditLogsError(true);
+    } finally {
+      setAuditLogsLoading(false);
+    }
+  }, [session?.accessToken, auditLogsPage, auditLogsLimit, auditSortBy, auditSortOrder, auditSearch, auditModuleFilter, auditActionFilter, auditSeverityFilter, auditStatusFilter, auditRoleFilter, auditLogsLoaded]);
+
+  const handleExportAuditCSV = () => {
+    const csvHeader = "Event ID,Timestamp,Actor,Role,Action,Module,Target,Severity,Status,Description\n";
+    const csvRows = auditLogs.map(l => {
+      const ts = l.timestamp ? new Date(l.timestamp).toISOString() : "N/A";
+      const desc = (l.description || "").replace(/"/g, '""');
+      return `"${l.event_id || l.id}","${ts}","${l.actor}","${l.actor_role}","${l.action_display || l.action}","${l.module}","${l.target}","${l.severity}","${l.status}","${desc}"`;
+    }).join("\n");
+    
+    const blob = new Blob([csvHeader + csvRows], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `audit_logs_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const getSeverityBadge = (severityStr: string) => {
+    const s = (severityStr || "").toUpperCase();
+    if (s === "CRITICAL") {
+      return (
+        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-red-50 text-red-700 border border-red-200/50">
+          Critical
+        </span>
+      );
+    }
+    if (s === "HIGH") {
+      return (
+        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-orange-50 text-orange-700 border border-orange-200/50">
+          High
+        </span>
+      );
+    }
+    if (s === "WARNING") {
+      return (
+        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-50 text-amber-700 border border-amber-200/50">
+          Warning
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-700 border border-slate-200/50">
+        Info
+      </span>
+    );
+  };
+
+  const getStatusBadge = (statusStr: string) => {
+    const s = (statusStr || "").toUpperCase();
+    if (s === "SUCCESS") {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200/50">
+          Success
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-red-50 text-red-700 border border-red-200/50">
+        Failed
+      </span>
+    );
+  };
+
   const getCaseStatusBadge = (statusStr: string) => {
     const s = (statusStr || "").toUpperCase().replace(/\s+/g, "_");
     if (s === "DRAFT") {
@@ -568,8 +695,17 @@ export default function AdminDashboard() {
       fetchInvestigators();
     } else if (activeSidebarTab === "Cases" && !adminCasesLoaded) {
       fetchAdminCases();
+    } else if (activeSidebarTab === "Audit Logs" && !auditLogsLoaded) {
+      fetchAuditLogs();
     }
-  }, [adminTab, activeSidebarTab, activeUsersLoaded, pendingUsersLoaded, invitationsLoaded, investigatorsLoaded, adminCasesLoaded, session?.accessToken, fetchUsers, fetchPendingUsers, fetchInvitations, fetchInvestigators, fetchAdminCases]);
+  }, [adminTab, activeSidebarTab, activeUsersLoaded, pendingUsersLoaded, invitationsLoaded, investigatorsLoaded, adminCasesLoaded, auditLogsLoaded, session?.accessToken, fetchUsers, fetchPendingUsers, fetchInvitations, fetchInvestigators, fetchAdminCases, fetchAuditLogs]);
+
+  // Refetch audit logs when search or filters or pagination parameters change
+  useEffect(() => {
+    if (session?.accessToken && activeSidebarTab === "Audit Logs") {
+      fetchAuditLogs(true);
+    }
+  }, [auditSearch, auditModuleFilter, auditActionFilter, auditSeverityFilter, auditStatusFilter, auditRoleFilter, auditSortBy, auditSortOrder, auditLogsPage, auditLogsLimit, session?.accessToken, activeSidebarTab]);
 
   // Refetch cases when search or status filter parameters change
   useEffect(() => {
