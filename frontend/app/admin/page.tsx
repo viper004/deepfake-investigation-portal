@@ -1308,14 +1308,16 @@ export default function AdminDashboard() {
                   ) : (
                     <div>
                       <div className="text-3xl font-extrabold text-[#0a0a0a] tracking-tight">
-                        {overviewData?.kpis?.total_cases?.formatted || "1,248"}
+                        {overviewData?.kpis?.total_cases?.formatted ?? (overviewData?.kpis?.total_cases?.value?.toString() || "0")}
                       </div>
                       <div className="flex items-center gap-1.5 mt-2">
                         <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-bold bg-emerald-50 text-emerald-700 gap-0.5">
                           <TrendingUp className="h-3.5 w-3.5" />
-                          {overviewData?.kpis?.total_cases?.trend || "+16%"}
+                          {overviewData?.kpis?.total_cases?.trend || "Live DB"}
                         </span>
-                        <span className="text-xs text-[#0a0a0a]/40 font-medium">from last 7 days</span>
+                        <span className="text-xs text-[#0a0a0a]/40 font-medium">
+                          {overviewData?.kpis?.total_cases?.period || "in selected period"}
+                        </span>
                       </div>
                     </div>
                   )}
@@ -1341,14 +1343,16 @@ export default function AdminDashboard() {
                   ) : (
                     <div>
                       <div className="text-3xl font-extrabold text-[#0a0a0a] tracking-tight">
-                        {overviewData?.kpis?.total_investigators?.formatted || "86"}
+                        {overviewData?.kpis?.total_investigators?.formatted ?? (overviewData?.kpis?.total_investigators?.value?.toString() || "0")}
                       </div>
                       <div className="flex items-center gap-1.5 mt-2">
                         <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-bold bg-emerald-50 text-emerald-700 gap-0.5">
                           <TrendingUp className="h-3.5 w-3.5" />
-                          {overviewData?.kpis?.total_investigators?.trend || "+8%"}
+                          {overviewData?.kpis?.total_investigators?.trend || "Live DB"}
                         </span>
-                        <span className="text-xs text-[#0a0a0a]/40 font-medium">from last 7 days</span>
+                        <span className="text-xs text-[#0a0a0a]/40 font-medium">
+                          {overviewData?.kpis?.total_investigators?.period || "in selected period"}
+                        </span>
                       </div>
                     </div>
                   )}
@@ -1374,14 +1378,16 @@ export default function AdminDashboard() {
                   ) : (
                     <div>
                       <div className="text-3xl font-extrabold text-[#0a0a0a] tracking-tight">
-                        {overviewData?.kpis?.total_users?.formatted || "312"}
+                        {overviewData?.kpis?.total_users?.formatted ?? (overviewData?.kpis?.total_users?.value?.toString() || "0")}
                       </div>
                       <div className="flex items-center gap-1.5 mt-2">
                         <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-bold bg-emerald-50 text-emerald-700 gap-0.5">
                           <TrendingUp className="h-3.5 w-3.5" />
-                          {overviewData?.kpis?.total_users?.trend || "+12%"}
+                          {overviewData?.kpis?.total_users?.trend || "Live DB"}
                         </span>
-                        <span className="text-xs text-[#0a0a0a]/40 font-medium">from last 7 days</span>
+                        <span className="text-xs text-[#0a0a0a]/40 font-medium">
+                          {overviewData?.kpis?.total_users?.period || "in selected period"}
+                        </span>
                       </div>
                     </div>
                   )}
@@ -1410,14 +1416,16 @@ export default function AdminDashboard() {
                   ) : (
                     <div>
                       <div className="text-3xl font-extrabold text-[#0a0a0a] tracking-tight">
-                        {overviewData?.kpis?.active_cases?.formatted || "486"}
+                        {overviewData?.kpis?.active_cases?.formatted ?? (overviewData?.kpis?.active_cases?.value?.toString() || "0")}
                       </div>
                       <div className="flex items-center gap-1.5 mt-2">
                         <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-bold bg-emerald-50 text-emerald-700 gap-0.5">
                           <TrendingUp className="h-3.5 w-3.5" />
-                          {overviewData?.kpis?.active_cases?.trend || "+18%"}
+                          {overviewData?.kpis?.active_cases?.trend || "Live DB"}
                         </span>
-                        <span className="text-xs text-[#0a0a0a]/40 font-medium">from last 7 days</span>
+                        <span className="text-xs text-[#0a0a0a]/40 font-medium">
+                          {overviewData?.kpis?.active_cases?.period || "in selected period"}
+                        </span>
                       </div>
                     </div>
                   )}
@@ -1434,10 +1442,10 @@ export default function AdminDashboard() {
                   </div>
                   <div className="flex items-baseline justify-between">
                     <span className="text-xl font-bold text-[#0a0a0a]">
-                      {overviewData?.secondary_stats?.case_investigator_ratio?.value || "14.5 : 1"}
+                      {overviewData?.secondary_stats?.case_investigator_ratio?.value || "0 : 1"}
                     </span>
                     <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-emerald-100 text-emerald-800 uppercase">
-                      {overviewData?.secondary_stats?.case_investigator_ratio?.status_badge || "Good"}
+                      {overviewData?.secondary_stats?.case_investigator_ratio?.status_badge || "Optimal"}
                     </span>
                   </div>
                   <div className="text-[11px] text-[#0a0a0a]/40 mt-1 font-medium">
@@ -1452,14 +1460,14 @@ export default function AdminDashboard() {
                   </div>
                   <div className="flex items-baseline justify-between">
                     <span className="text-xl font-bold text-[#0a0a0a]">
-                      {overviewData?.secondary_stats?.cases_closed?.formatted || "128"}
+                      {overviewData?.secondary_stats?.cases_closed?.formatted ?? (overviewData?.secondary_stats?.cases_closed?.value?.toString() || "0")}
                     </span>
                     <span className="text-xs font-bold text-emerald-600 flex items-center gap-0.5">
                       <TrendingUp className="h-3 w-3" />
-                      {overviewData?.secondary_stats?.cases_closed?.trend || "+22%"}
+                      {overviewData?.secondary_stats?.cases_closed?.trend || "Live DB"}
                     </span>
                   </div>
-                  <div className="text-[11px] text-[#0a0a0a]/40 mt-1 font-medium">from last 7 days</div>
+                  <div className="text-[11px] text-[#0a0a0a]/40 mt-1 font-medium">in selected period</div>
                 </div>
 
                 {/* Pending Cases */}
@@ -1469,14 +1477,14 @@ export default function AdminDashboard() {
                   </div>
                   <div className="flex items-baseline justify-between">
                     <span className="text-xl font-bold text-[#0a0a0a]">
-                      {overviewData?.secondary_stats?.pending_cases?.formatted || "214"}
+                      {overviewData?.secondary_stats?.pending_cases?.formatted ?? (overviewData?.secondary_stats?.pending_cases?.value?.toString() || "0")}
                     </span>
                     <span className="text-xs font-bold text-blue-600 flex items-center gap-0.5">
-                      <TrendingDown className="h-3 w-3" />
-                      {overviewData?.secondary_stats?.pending_cases?.trend || "-6%"}
+                      <Activity className="h-3 w-3" />
+                      {overviewData?.secondary_stats?.pending_cases?.trend || "Live DB"}
                     </span>
                   </div>
-                  <div className="text-[11px] text-[#0a0a0a]/40 mt-1 font-medium">from last 7 days</div>
+                  <div className="text-[11px] text-[#0a0a0a]/40 mt-1 font-medium">in selected period</div>
                 </div>
 
                 {/* Overdue Cases */}
@@ -1487,14 +1495,14 @@ export default function AdminDashboard() {
                   </div>
                   <div className="flex items-baseline justify-between">
                     <span className="text-xl font-bold text-[#0a0a0a]">
-                      {overviewData?.secondary_stats?.overdue_cases?.formatted || "37"}
+                      {overviewData?.secondary_stats?.overdue_cases?.formatted ?? (overviewData?.secondary_stats?.overdue_cases?.value?.toString() || "0")}
                     </span>
                     <span className="text-xs font-bold text-amber-600 flex items-center gap-0.5">
-                      <TrendingDown className="h-3 w-3" />
-                      {overviewData?.secondary_stats?.overdue_cases?.trend || "-11%"}
+                      <Activity className="h-3 w-3" />
+                      {overviewData?.secondary_stats?.overdue_cases?.trend || "Live DB"}
                     </span>
                   </div>
-                  <div className="text-[11px] text-[#0a0a0a]/40 mt-1 font-medium">from last 7 days</div>
+                  <div className="text-[11px] text-[#0a0a0a]/40 mt-1 font-medium">in selected period</div>
                 </div>
 
                 {/* System Alerts */}
@@ -1508,14 +1516,14 @@ export default function AdminDashboard() {
                   </div>
                   <div className="flex items-baseline justify-between">
                     <span className="text-xl font-bold text-[#0a0a0a]">
-                      {overviewData?.secondary_stats?.system_alerts?.formatted || "24"}
+                      {overviewData?.secondary_stats?.system_alerts?.formatted ?? (overviewData?.secondary_stats?.system_alerts?.value?.toString() || "0")}
                     </span>
                     <span className="text-xs font-bold text-emerald-600 flex items-center gap-0.5">
-                      <TrendingDown className="h-3 w-3" />
-                      {overviewData?.secondary_stats?.system_alerts?.trend || "-14%"}
+                      <Activity className="h-3 w-3" />
+                      {overviewData?.secondary_stats?.system_alerts?.trend || "Live DB"}
                     </span>
                   </div>
-                  <div className="text-[11px] text-[#0a0a0a]/40 mt-1 font-medium">from last 7 days</div>
+                  <div className="text-[11px] text-[#0a0a0a]/40 mt-1 font-medium">in selected period</div>
                 </div>
               </div>
 
@@ -1526,7 +1534,7 @@ export default function AdminDashboard() {
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-[#f0f0f0] pb-4 mb-4">
                     <div>
                       <h2 className="font-bold text-lg text-[#0a0a0a]">Cases Trend</h2>
-                      <p className="text-xs text-[#0a0a0a]/50">New vs Closed Cases over time</p>
+                      <p className="text-xs text-[#0a0a0a]/50">New vs Closed Cases over selected timeframe</p>
                     </div>
                     <div className="flex items-center gap-4 text-xs font-semibold">
                       <div className="flex items-center gap-1.5">
@@ -1540,80 +1548,79 @@ export default function AdminDashboard() {
                     </div>
                   </div>
 
-                  {/* SVG Line / Area Graph */}
-                  <div className="relative w-full h-64 pt-2">
-                    <svg className="w-full h-full overflow-visible" viewBox="0 0 500 200" preserveAspectRatio="none">
-                      <defs>
-                        <linearGradient id="newCasesGradient" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#CC2200" stopOpacity="0.25" />
-                          <stop offset="100%" stopColor="#CC2200" stopOpacity="0.0" />
-                        </linearGradient>
-                        <linearGradient id="closedCasesGradient" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#10B981" stopOpacity="0.25" />
-                          <stop offset="100%" stopColor="#10B981" stopOpacity="0.0" />
-                        </linearGradient>
-                      </defs>
+                  {/* Dynamic SVG Line / Area Graph */}
+                  {(() => {
+                    const trendList = overviewData?.cases_trend || [];
+                    const maxVal = Math.max(...trendList.flatMap((d: any) => [d.new_cases, d.closed_cases]), 5);
+                    const totalPts = Math.max(trendList.length, 1);
+                    const xStep = totalPts > 1 ? 420 / (totalPts - 1) : 420;
+                    
+                    const points = trendList.map((d: any, idx: number) => {
+                      const x = 20 + idx * xStep;
+                      const newY = 175 - (d.new_cases / maxVal) * 125;
+                      const closedY = 175 - (d.closed_cases / maxVal) * 125;
+                      return { ...d, x, newY, closedY };
+                    });
 
-                      {/* Grid Horizontal Lines */}
-                      <line x1="0" y1="40" x2="500" y2="40" stroke="#f0f0f0" strokeDasharray="4 4" />
-                      <line x1="0" y1="90" x2="500" y2="90" stroke="#f0f0f0" strokeDasharray="4 4" />
-                      <line x1="0" y1="140" x2="500" y2="140" stroke="#f0f0f0" strokeDasharray="4 4" />
-                      <line x1="0" y1="180" x2="500" y2="180" stroke="#e5e5e5" />
+                    const newPath = points.length > 0
+                      ? points.map((p: any, i: number) => `${i === 0 ? 'M' : 'L'} ${p.x},${p.newY}`).join(' ')
+                      : 'M 20,175 L 440,175';
 
-                      {/* Area Under Curves */}
-                      <path
-                        d="M 20,135 Q 90,110 160,95 T 300,80 T 440,30 L 440,180 L 20,180 Z"
-                        fill="url(#newCasesGradient)"
-                      />
-                      <path
-                        d="M 20,170 Q 90,160 160,148 T 300,120 T 440,70 L 440,180 L 20,180 Z"
-                        fill="url(#closedCasesGradient)"
-                      />
+                    const newAreaPath = points.length > 0
+                      ? `${newPath} L ${points[points.length - 1].x},175 L ${points[0].x},175 Z`
+                      : '';
 
-                      {/* Lines */}
-                      <path
-                        d="M 20,135 Q 90,110 160,95 T 300,80 T 440,30"
-                        fill="none"
-                        stroke="#CC2200"
-                        strokeWidth="3"
-                        strokeLinecap="round"
-                      />
-                      <path
-                        d="M 20,170 Q 90,160 160,148 T 300,120 T 440,70"
-                        fill="none"
-                        stroke="#10B981"
-                        strokeWidth="3"
-                        strokeLinecap="round"
-                      />
+                    const closedPath = points.length > 0
+                      ? points.map((p: any, i: number) => `${i === 0 ? 'M' : 'L'} ${p.x},${p.closedY}`).join(' ')
+                      : 'M 20,175 L 440,175';
 
-                      {/* Data Points */}
-                      {[
-                        { x: 20, newY: 135, closedY: 170, date: "May 18", newVal: 42, closedVal: 18 },
-                        { x: 90, newY: 110, closedY: 160, date: "May 19", newVal: 58, closedVal: 24 },
-                        { x: 160, newY: 95, closedY: 148, date: "May 20", newVal: 65, closedVal: 31 },
-                        { x: 230, newY: 88, closedY: 135, date: "May 21", newVal: 72, closedVal: 45 },
-                        { x: 300, newY: 80, closedY: 120, date: "May 22", newVal: 81, closedVal: 52 },
-                        { x: 370, newY: 55, closedY: 95, date: "May 23", newVal: 94, closedVal: 68 },
-                        { x: 440, newY: 30, closedY: 70, date: "May 24", newVal: 110, closedVal: 84 },
-                      ].map((pt, idx) => (
-                        <g key={idx} className="group cursor-pointer">
-                          <circle cx={pt.x} cy={pt.newY} r="4" fill="#CC2200" stroke="#ffffff" strokeWidth="2" />
-                          <circle cx={pt.x} cy={pt.closedY} r="4" fill="#10B981" stroke="#ffffff" strokeWidth="2" />
-                        </g>
-                      ))}
-                    </svg>
-                  </div>
+                    const closedAreaPath = points.length > 0
+                      ? `${closedPath} L ${points[points.length - 1].x},175 L ${points[0].x},175 Z`
+                      : '';
 
-                  {/* X-Axis Labels */}
-                  <div className="flex justify-between items-center px-2 pt-2 border-t border-[#f0f0f0] text-xs font-semibold text-[#0a0a0a]/50">
-                    <span>May 18</span>
-                    <span>May 19</span>
-                    <span>May 20</span>
-                    <span>May 21</span>
-                    <span>May 22</span>
-                    <span>May 23</span>
-                    <span>May 24</span>
-                  </div>
+                    return (
+                      <>
+                        <div className="relative w-full h-64 pt-2">
+                          <svg className="w-full h-full overflow-visible" viewBox="0 0 500 200" preserveAspectRatio="none">
+                            <defs>
+                              <linearGradient id="newCasesGradient" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#CC2200" stopOpacity="0.25" />
+                                <stop offset="100%" stopColor="#CC2200" stopOpacity="0.0" />
+                              </linearGradient>
+                              <linearGradient id="closedCasesGradient" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#10B981" stopOpacity="0.25" />
+                                <stop offset="100%" stopColor="#10B981" stopOpacity="0.0" />
+                              </linearGradient>
+                            </defs>
+
+                            <line x1="0" y1="40" x2="500" y2="40" stroke="#f0f0f0" strokeDasharray="4 4" />
+                            <line x1="0" y1="90" x2="500" y2="90" stroke="#f0f0f0" strokeDasharray="4 4" />
+                            <line x1="0" y1="140" x2="500" y2="140" stroke="#f0f0f0" strokeDasharray="4 4" />
+                            <line x1="0" y1="175" x2="500" y2="175" stroke="#e5e5e5" />
+
+                            {newAreaPath && <path d={newAreaPath} fill="url(#newCasesGradient)" />}
+                            {closedAreaPath && <path d={closedAreaPath} fill="url(#closedCasesGradient)" />}
+
+                            <path d={newPath} fill="none" stroke="#CC2200" strokeWidth="3" strokeLinecap="round" />
+                            <path d={closedPath} fill="none" stroke="#10B981" strokeWidth="3" strokeLinecap="round" />
+
+                            {points.map((pt: any, idx: number) => (
+                              <g key={idx} className="group cursor-pointer">
+                                <circle cx={pt.x} cy={pt.newY} r="4" fill="#CC2200" stroke="#ffffff" strokeWidth="2" />
+                                <circle cx={pt.x} cy={pt.closedY} r="4" fill="#10B981" stroke="#ffffff" strokeWidth="2" />
+                              </g>
+                            ))}
+                          </svg>
+                        </div>
+
+                        <div className="flex justify-between items-center px-2 pt-2 border-t border-[#f0f0f0] text-xs font-semibold text-[#0a0a0a]/50">
+                          {points.map((pt: any, idx: number) => (
+                            <span key={idx}>{pt.date}</span>
+                          ))}
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
 
                 {/* 2. Case Status Distribution (Donut Chart) */}
@@ -1623,25 +1630,45 @@ export default function AdminDashboard() {
                     <p className="text-xs text-[#0a0a0a]/50">Current stage breakdown across platform</p>
                   </div>
 
-                  {/* Donut Graphic */}
+                  {/* Dynamic Donut Graphic */}
                   <div className="relative flex items-center justify-center my-2">
-                    <svg className="w-44 h-44 transform -rotate-90" viewBox="0 0 100 100">
-                      {/* Open 38.9% */}
-                      <circle cx="50" cy="50" r="38" fill="none" stroke="#3B82F6" strokeWidth="16" strokeDasharray="92.8 238.7" strokeDashoffset="0" />
-                      {/* Under Investigation 29.8% */}
-                      <circle cx="50" cy="50" r="38" fill="none" stroke="#8B5CF6" strokeWidth="16" strokeDasharray="71.1 238.7" strokeDashoffset="-92.8" />
-                      {/* Pending Review 14.9% */}
-                      <circle cx="50" cy="50" r="38" fill="none" stroke="#F59E0B" strokeWidth="16" strokeDasharray="35.5 238.7" strokeDashoffset="-163.9" />
-                      {/* Resolved 12.2% */}
-                      <circle cx="50" cy="50" r="38" fill="none" stroke="#10B981" strokeWidth="16" strokeDasharray="29.1 238.7" strokeDashoffset="-199.4" />
-                      {/* Closed 4.2% */}
-                      <circle cx="50" cy="50" r="38" fill="none" stroke="#64748B" strokeWidth="16" strokeDasharray="10.0 238.7" strokeDashoffset="-228.5" />
-                    </svg>
+                    {(() => {
+                      const statusDist = overviewData?.case_status_distribution || [];
+                      let accumPct = 0;
+                      const CIRCUMFERENCE = 238.76;
+
+                      return (
+                        <svg className="w-44 h-44 transform -rotate-90" viewBox="0 0 100 100">
+                          {statusDist.length === 0 || (overviewData?.kpis?.total_cases?.value === 0) ? (
+                            <circle cx="50" cy="50" r="38" fill="none" stroke="#e5e5e5" strokeWidth="16" />
+                          ) : (
+                            statusDist.map((item: any, idx: number) => {
+                              const dash = (item.percentage / 100) * CIRCUMFERENCE;
+                              const offset = -(accumPct / 100) * CIRCUMFERENCE;
+                              accumPct += item.percentage;
+                              return (
+                                <circle
+                                  key={idx}
+                                  cx="50"
+                                  cy="50"
+                                  r="38"
+                                  fill="none"
+                                  stroke={item.color || '#64748B'}
+                                  strokeWidth="16"
+                                  strokeDasharray={`${dash.toFixed(1)} ${CIRCUMFERENCE.toFixed(1)}`}
+                                  strokeDashoffset={offset.toFixed(1)}
+                                />
+                              );
+                            })
+                          )}
+                        </svg>
+                      );
+                    })()}
 
                     {/* Donut Center Content */}
                     <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
                       <span className="text-2xl font-black text-[#0a0a0a]">
-                        {overviewData?.kpis?.total_cases?.formatted || "1,248"}
+                        {overviewData?.kpis?.total_cases?.formatted ?? (overviewData?.kpis?.total_cases?.value?.toString() || "0")}
                       </span>
                       <span className="text-[10px] font-bold text-[#0a0a0a]/40 uppercase tracking-wider">Total Cases</span>
                     </div>
@@ -1649,28 +1676,28 @@ export default function AdminDashboard() {
 
                   {/* Legend List */}
                   <div className="space-y-2 mt-4 pt-4 border-t border-[#f0f0f0]">
-                    {[
-                      { label: "Open", count: "486", pct: "38.9%", color: "bg-blue-500", statusKey: "CASE_FILED" },
-                      { label: "Under Investigation", count: "372", pct: "29.8%", color: "bg-purple-500", statusKey: "CASE_UNDER_INVESTIGATION" },
-                      { label: "Pending Review", count: "186", pct: "14.9%", color: "bg-amber-500", statusKey: "REVIEW" },
-                      { label: "Resolved", count: "152", pct: "12.2%", color: "bg-emerald-500", statusKey: "RESOLVED" },
-                      { label: "Closed", count: "52", pct: "4.2%", color: "bg-slate-500", statusKey: "CLOSED" }
-                    ].map((item, i) => (
+                    {(overviewData?.case_status_distribution || [
+                      { name: "Open", count: 0, percentage: 0, color: "#3B82F6", statusKey: "CASE_FILED" },
+                      { name: "Under Investigation", count: 0, percentage: 0, color: "#8B5CF6", statusKey: "CASE_UNDER_INVESTIGATION" },
+                      { name: "Pending Review", count: 0, percentage: 0, color: "#F59E0B", statusKey: "REVIEW" },
+                      { name: "Resolved", count: 0, percentage: 0, color: "#10B981", statusKey: "RESOLVED" },
+                      { name: "Closed", count: 0, percentage: 0, color: "#64748B", statusKey: "CLOSED" }
+                    ]).map((item: any, i: number) => (
                       <div 
                         key={i} 
                         onClick={() => {
                           setActiveSidebarTab("Cases");
-                          setAdminCasesStatusFilter(item.label);
+                          setAdminCasesStatusFilter(item.name);
                         }}
                         className="flex items-center justify-between text-xs hover:bg-[#fafafa] p-1.5 rounded cursor-pointer transition-colors"
                       >
                         <div className="flex items-center gap-2">
-                          <span className={`w-2.5 h-2.5 rounded-full ${item.color}`} />
-                          <span className="font-semibold text-[#0a0a0a]/80">{item.label}</span>
+                          <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: item.color || '#64748B' }} />
+                          <span className="font-semibold text-[#0a0a0a]/80">{item.name}</span>
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-[#0a0a0a]">{item.count}</span>
-                          <span className="text-[#0a0a0a]/40 text-[11px] font-medium w-10 text-right">{item.pct}</span>
+                          <span className="text-[#0a0a0a]/40 text-[11px] font-medium w-10 text-right">{item.percentage}%</span>
                         </div>
                       </div>
                     ))}
@@ -1689,20 +1716,42 @@ export default function AdminDashboard() {
 
                   {/* Priority Donut Graphic */}
                   <div className="relative flex items-center justify-center my-2">
-                    <svg className="w-40 h-40 transform -rotate-90" viewBox="0 0 100 100">
-                      {/* Critical 11.4% */}
-                      <circle cx="50" cy="50" r="38" fill="none" stroke="#EF4444" strokeWidth="16" strokeDasharray="27.2 238.7" strokeDashoffset="0" />
-                      {/* High 30.9% */}
-                      <circle cx="50" cy="50" r="38" fill="none" stroke="#F97316" strokeWidth="16" strokeDasharray="73.7 238.7" strokeDashoffset="-27.2" />
-                      {/* Medium 41.0% */}
-                      <circle cx="50" cy="50" r="38" fill="none" stroke="#F59E0B" strokeWidth="16" strokeDasharray="97.8 238.7" strokeDashoffset="-100.9" />
-                      {/* Low 16.7% */}
-                      <circle cx="50" cy="50" r="38" fill="none" stroke="#10B981" strokeWidth="16" strokeDasharray="39.8 238.7" strokeDashoffset="-198.7" />
-                    </svg>
+                    {(() => {
+                      const priorityDist = overviewData?.case_priority_distribution || [];
+                      let accumPct = 0;
+                      const CIRCUMFERENCE = 238.76;
+
+                      return (
+                        <svg className="w-40 h-40 transform -rotate-90" viewBox="0 0 100 100">
+                          {priorityDist.length === 0 || (overviewData?.kpis?.total_cases?.value === 0) ? (
+                            <circle cx="50" cy="50" r="38" fill="none" stroke="#e5e5e5" strokeWidth="16" />
+                          ) : (
+                            priorityDist.map((item: any, idx: number) => {
+                              const dash = (item.percentage / 100) * CIRCUMFERENCE;
+                              const offset = -(accumPct / 100) * CIRCUMFERENCE;
+                              accumPct += item.percentage;
+                              return (
+                                <circle
+                                  key={idx}
+                                  cx="50"
+                                  cy="50"
+                                  r="38"
+                                  fill="none"
+                                  stroke={item.color || '#F59E0B'}
+                                  strokeWidth="16"
+                                  strokeDasharray={`${dash.toFixed(1)} ${CIRCUMFERENCE.toFixed(1)}`}
+                                  strokeDashoffset={offset.toFixed(1)}
+                                />
+                              );
+                            })
+                          )}
+                        </svg>
+                      );
+                    })()}
 
                     <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
                       <span className="text-xl font-black text-[#0a0a0a]">
-                        {overviewData?.kpis?.total_cases?.formatted || "1,248"}
+                        {overviewData?.kpis?.total_cases?.formatted ?? (overviewData?.kpis?.total_cases?.value?.toString() || "0")}
                       </span>
                       <span className="text-[9px] font-bold text-[#0a0a0a]/40 uppercase tracking-wider">Priority Cases</span>
                     </div>
@@ -1710,20 +1759,20 @@ export default function AdminDashboard() {
 
                   {/* Priority Legend */}
                   <div className="space-y-2 mt-4 pt-4 border-t border-[#f0f0f0]">
-                    {[
-                      { label: "Critical", count: "142", pct: "11.4%", color: "bg-red-500" },
-                      { label: "High", count: "386", pct: "30.9%", color: "bg-orange-500" },
-                      { label: "Medium", count: "512", pct: "41.0%", color: "bg-amber-500" },
-                      { label: "Low", count: "208", pct: "16.7%", color: "bg-emerald-500" }
-                    ].map((item, i) => (
+                    {(overviewData?.case_priority_distribution || [
+                      { name: "Critical", count: 0, percentage: 0, color: "#EF4444" },
+                      { name: "High", count: 0, percentage: 0, color: "#F97316" },
+                      { name: "Medium", count: 0, percentage: 0, color: "#F59E0B" },
+                      { name: "Low", count: 0, percentage: 0, color: "#10B981" }
+                    ]).map((item: any, i: number) => (
                       <div key={i} className="flex items-center justify-between text-xs hover:bg-[#fafafa] p-1.5 rounded transition-colors">
                         <div className="flex items-center gap-2">
-                          <span className={`w-2.5 h-2.5 rounded-full ${item.color}`} />
-                          <span className="font-semibold text-[#0a0a0a]/80">{item.label}</span>
+                          <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: item.color || '#F59E0B' }} />
+                          <span className="font-semibold text-[#0a0a0a]/80">{item.name}</span>
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-[#0a0a0a]">{item.count}</span>
-                          <span className="text-[#0a0a0a]/40 text-[11px] font-medium w-10 text-right">{item.pct}</span>
+                          <span className="text-[#0a0a0a]/40 text-[11px] font-medium w-10 text-right">{item.percentage}%</span>
                         </div>
                       </div>
                     ))}
@@ -1747,7 +1796,7 @@ export default function AdminDashboard() {
                           <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
                         </span>
                         <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200/60 uppercase tracking-wider">
-                          Operational
+                          {overviewData?.ai_model_status?.status_badge || "Operational"}
                         </span>
                       </div>
                     </div>
@@ -1756,11 +1805,13 @@ export default function AdminDashboard() {
                     <div className="bg-[#fafafa] border border-[#e5e5e5] rounded-lg p-4 mb-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                       <div>
                         <div className="text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/40">Active Inference Engine</div>
-                        <div className="text-lg font-black text-[#0a0a0a] mt-0.5">Sentinel Risk Engine v2.1</div>
+                        <div className="text-lg font-black text-[#0a0a0a] mt-0.5">
+                          {overviewData?.ai_model_status?.model_name || "Sentinel Risk Engine v2.1"}
+                        </div>
                         <div className="text-xs text-[#0a0a0a]/60 mt-1 flex items-center gap-3">
-                          <span>Uptime: <strong className="text-emerald-600 font-bold">99.82%</strong></span>
+                          <span>Uptime: <strong className="text-emerald-600 font-bold">{overviewData?.ai_model_status?.uptime || "99.9%"}</strong></span>
                           <span>•</span>
-                          <span>Last updated: May 24, 2026, 08:15 AM</span>
+                          <span>Last updated: {overviewData?.ai_model_status?.last_updated || "Just now"}</span>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -1777,10 +1828,12 @@ export default function AdminDashboard() {
                         <div className="text-xs font-bold text-[#0a0a0a]/50 uppercase tracking-wider mb-1">
                           Predictions / Assessments
                         </div>
-                        <div className="text-2xl font-black text-[#0a0a0a]">5,842</div>
+                        <div className="text-2xl font-black text-[#0a0a0a]">
+                          {overviewData?.ai_model_status?.metrics?.assessments?.value || "0"}
+                        </div>
                         <div className="text-xs font-bold text-emerald-600 flex items-center gap-1 mt-1">
                           <TrendingUp className="h-3.5 w-3.5" />
-                          +19% from last 7 days
+                          {overviewData?.ai_model_status?.metrics?.assessments?.trend || "Live DB"}
                         </div>
                       </div>
 
@@ -1789,10 +1842,12 @@ export default function AdminDashboard() {
                         <div className="text-xs font-bold text-[#0a0a0a]/50 uppercase tracking-wider mb-1">
                           Average Confidence
                         </div>
-                        <div className="text-2xl font-black text-[#0a0a0a]">87.6%</div>
+                        <div className="text-2xl font-black text-[#0a0a0a]">
+                          {overviewData?.ai_model_status?.metrics?.avg_confidence?.value || "N/A"}
+                        </div>
                         <div className="text-xs font-bold text-emerald-600 flex items-center gap-1 mt-1">
                           <TrendingUp className="h-3.5 w-3.5" />
-                          +3.2% accuracy score
+                          {overviewData?.ai_model_status?.metrics?.avg_confidence?.trend || "Scored"}
                         </div>
                       </div>
 
@@ -1801,10 +1856,12 @@ export default function AdminDashboard() {
                         <div className="text-xs font-bold text-[#0a0a0a]/50 uppercase tracking-wider mb-1">
                           Avg Inference Time
                         </div>
-                        <div className="text-2xl font-black text-[#0a0a0a]">1.24s</div>
+                        <div className="text-2xl font-black text-[#0a0a0a]">
+                          {overviewData?.ai_model_status?.metrics?.avg_inference_time?.value || "N/A"}
+                        </div>
                         <div className="text-xs font-bold text-emerald-600 flex items-center gap-1 mt-1">
-                          <TrendingDown className="h-3.5 w-3.5" />
-                          -8% latency reduction
+                          <Activity className="h-3.5 w-3.5" />
+                          {overviewData?.ai_model_status?.metrics?.avg_inference_time?.trend || "Optimized"}
                         </div>
                       </div>
                     </div>
@@ -1829,28 +1886,31 @@ export default function AdminDashboard() {
                         <h2 className="font-bold text-lg text-[#0a0a0a]">AI Operations Usage</h2>
                         <p className="text-xs text-[#0a0a0a]/50">Execution volume by task type</p>
                       </div>
-                      <span className="text-xs font-bold text-[#CC2200] bg-[#CC2200]/10 px-2 py-0.5 rounded">
-                        Last 7 days
+                      <span className="text-xs font-bold text-[#CC2200] bg-[#CC2200]/10 px-2 py-0.5 rounded capitalize">
+                        {overviewDateRange.replace(/_/g, " ")}
                       </span>
                     </div>
 
                     <div className="space-y-4">
-                      {[
-                        { label: "Risk Assessments", count: "5,842", trend: "+19%", barWidth: "85%", color: "bg-[#CC2200]" },
-                        { label: "Anomaly Detections", count: "2,194", trend: "+14%", barWidth: "62%", color: "bg-orange-500" },
-                        { label: "Summarizations", count: "1,026", trend: "+7%", barWidth: "41%", color: "bg-blue-500" },
-                        { label: "Recommendations", count: "912", trend: "+12%", barWidth: "35%", color: "bg-emerald-500" }
-                      ].map((op, idx) => (
+                      {(overviewData?.ai_usage || [
+                        { label: "Risk Assessments", count: 0, formatted: "0", percentage: 0, color: "#CC2200" },
+                        { label: "Anomaly Detections", count: 0, formatted: "0", percentage: 0, color: "#F97316" },
+                        { label: "Summarizations", count: 0, formatted: "0", percentage: 0, color: "#3B82F6" },
+                        { label: "Recommendations", count: 0, formatted: "0", percentage: 0, color: "#10B981" }
+                      ]).map((op: any, idx: number) => (
                         <div key={idx} className="space-y-1">
                           <div className="flex justify-between items-center text-xs">
                             <span className="font-bold text-[#0a0a0a]">{op.label}</span>
                             <div className="flex items-center gap-2">
-                              <span className="font-black text-[#0a0a0a]">{op.count}</span>
-                              <span className="text-[10px] font-bold text-emerald-600">{op.trend}</span>
+                              <span className="font-black text-[#0a0a0a]">{op.formatted || op.count}</span>
+                              <span className="text-[10px] font-bold text-emerald-600">{op.percentage}%</span>
                             </div>
                           </div>
                           <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                            <div className={`h-full rounded-full ${op.color} transition-all duration-500`} style={{ width: op.barWidth }} />
+                            <div 
+                              className="h-full rounded-full transition-all duration-500" 
+                              style={{ width: `${op.percentage}%`, backgroundColor: op.color || '#CC2200' }} 
+                            />
                           </div>
                         </div>
                       ))}
@@ -1868,7 +1928,7 @@ export default function AdminDashboard() {
                     <div className="flex justify-between items-center border-b border-[#f0f0f0] pb-3 mb-4">
                       <div>
                         <h2 className="font-bold text-lg text-[#0a0a0a]">Recent System Activity</h2>
-                        <p className="text-xs text-[#0a0a0a]/50">Latest platform security events</p>
+                        <p className="text-xs text-[#0a0a0a]/50">Latest platform audit events</p>
                       </div>
                       <button
                         onClick={() => setActiveSidebarTab("Audit Logs")}
@@ -1881,13 +1941,7 @@ export default function AdminDashboard() {
                     <div className="space-y-3">
                       {(overviewData?.recent_activity && overviewData.recent_activity.length > 0
                         ? overviewData.recent_activity.slice(0, 5)
-                        : [
-                            { action: "Investigator Role Assigned", actor: "SUPERUSER", timestamp: "2m ago", severity: "INFO", description: "Role assigned to investigator" },
-                            { action: "Case Status Updated", actor: "INVESTIGATOR", timestamp: "12m ago", severity: "INFO", description: "Case status changed to Under Investigation" },
-                            { action: "Forensic Scan Completed", actor: "AI_ENGINE", timestamp: "28m ago", severity: "INFO", description: "Forensic scan finalized for evidence" },
-                            { action: "User Approved", actor: "SUPERUSER", timestamp: "1h ago", severity: "INFO", description: "User account approved by Superuser" },
-                            { action: "Security Policy Updated", actor: "SUPERUSER", timestamp: "3h ago", severity: "HIGH", description: "MFA setting enforced platform-wide" }
-                          ]
+                        : []
                       ).map((act: any, idx: number) => (
                         <div key={idx} className="flex items-start gap-3 p-2 rounded-lg hover:bg-[#fafafa] transition-colors">
                           <div className="p-1.5 rounded-full bg-slate-100 text-[#0a0a0a]/60 mt-0.5">
@@ -1902,6 +1956,11 @@ export default function AdminDashboard() {
                           </div>
                         </div>
                       ))}
+                      {(!overviewData?.recent_activity || overviewData.recent_activity.length === 0) && (
+                        <div className="text-center py-6 text-xs text-[#0a0a0a]/40">
+                          No recent system activity recorded.
+                        </div>
+                      )}
                     </div>
                   </div>
 
