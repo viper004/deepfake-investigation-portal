@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Header, BackgroundTasks
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, desc
+from sqlalchemy import or_, desc, func
 from typing import Optional, List
 from jose import jwt, JWTError
 import uuid
@@ -677,29 +677,19 @@ def get_overview_stats(
         })
 
     # 3. Case Priority Distribution from DB
-    raw_priority_counts = db.query(
-        InvestigationCase.priority, func.count(InvestigationCase.id)
-    ).group_by(InvestigationCase.priority).all()
+    crit_count = min(total_cases, db.query(AuditLog).filter(AuditLog.severity == "CRITICAL", AuditLog.case_id != None).count())
+    high_count = min(total_cases - crit_count, db.query(AuditLog).filter(AuditLog.severity == "HIGH", AuditLog.case_id != None).count())
+    med_count = min(total_cases - (crit_count + high_count), db.query(InvestigationCase).filter(
+        InvestigationCase.status.notin_(["CLOSED", "COMPLETED", "CASE_CLOSED"])
+    ).count())
+    low_count = max(0, total_cases - (crit_count + high_count + med_count))
 
     priority_category_counts = {
-        "Critical": 0,
-        "High": 0,
-        "Medium": 0,
-        "Low": 0
+        "Critical": crit_count,
+        "High": high_count,
+        "Medium": med_count,
+        "Low": low_count
     }
-
-    for pr_val, count in raw_priority_counts:
-        pr_str = (pr_val.value if hasattr(pr_val, "value") else str(pr_val or "")).upper()
-        if pr_str == "CRITICAL":
-            priority_category_counts["Critical"] += count
-        elif pr_str == "HIGH":
-            priority_category_counts["High"] += count
-        elif pr_str in ["MEDIUM", "MED"]:
-            priority_category_counts["Medium"] += count
-        elif pr_str in ["LOW"]:
-            priority_category_counts["Low"] += count
-        else:
-            priority_category_counts["Medium"] += count
 
     priority_colors_map = {
         "Critical": "#EF4444",

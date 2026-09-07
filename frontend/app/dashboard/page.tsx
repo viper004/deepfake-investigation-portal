@@ -2277,29 +2277,33 @@ function UserDashboardContent() {
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse text-sm min-w-[720px]">
+                    <table className="w-full text-left border-collapse text-sm min-w-[800px] table-fixed">
                       <thead>
-                        <tr className="bg-slate-50 border-b border-[#e5e5e5] text-xs font-bold text-[#0a0a0a]/60 uppercase">
-                          <th className="px-6 py-4 w-44 whitespace-nowrap">Case Code</th>
-                          <th className="px-6 py-4 min-w-[200px]">Title</th>
-                          <th className="px-6 py-4 w-48 whitespace-nowrap">Status</th>
+                        <tr className="bg-slate-50 border-b border-[#e5e5e5] text-xs font-bold text-[#0a0a0a]/60 uppercase tracking-wider">
                           {isInvestigator ? (
                             <>
-                              <th className="px-6 py-4 w-36 whitespace-nowrap">Last Updated</th>
-                              <th className="px-6 py-4 text-right min-w-[170px] w-48 whitespace-nowrap">Action</th>
+                              <th className="px-4 py-4 w-[20%] min-w-[140px] whitespace-nowrap">Case Code</th>
+                              <th className="px-4 py-4 w-[31%] min-w-[210px]">Title</th>
+                              <th className="px-4 py-4 w-[18%] min-w-[150px] whitespace-nowrap">Status</th>
+                              <th className="px-4 py-4 w-[16%] min-w-[130px] whitespace-nowrap">Last Updated</th>
+                              <th className="px-4 py-4 text-center w-[15%] min-w-[160px] whitespace-nowrap">ACTIONS</th>
                             </>
                           ) : (
                             <>
-                              <th className="px-6 py-4 w-36 whitespace-nowrap">Incident Date</th>
-                              <th className="px-6 py-4 w-36 whitespace-nowrap">Created On</th>
+                              <th className="px-4 py-4 w-[18%] min-w-[130px] whitespace-nowrap">Case Code</th>
+                              <th className="px-4 py-4 w-[29%] min-w-[190px]">Title</th>
+                              <th className="px-4 py-4 w-[18%] min-w-[150px] whitespace-nowrap">Status</th>
+                              <th className="px-4 py-4 w-[10%] min-w-[110px] whitespace-nowrap">Incident Date</th>
+                              <th className="px-4 py-4 w-[10%] min-w-[110px] whitespace-nowrap">Created On</th>
+                              <th className="px-4 py-4 text-center w-[15%] min-w-[160px] whitespace-nowrap">ACTIONS</th>
                             </>
                           )}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#e5e5e5] text-sm">
                         {cases.map((c: any) => (
-                          <tr key={c.id} className="hover:bg-slate-50/50">
-                            <td className="px-6 py-4 font-bold whitespace-nowrap">
+                          <tr key={c.id} className="hover:bg-slate-50/50 transition-colors">
+                            <td className="px-4 py-4 font-bold whitespace-nowrap">
                               <button
                                 type="button"
                                 onClick={() => viewCaseDetails(c.id)}
@@ -2308,32 +2312,42 @@ function UserDashboardContent() {
                                 {c.case_number}
                               </button>
                             </td>
-                            <td className="px-6 py-4">
+                            <td className="px-4 py-4">
                               <p className="font-semibold text-[#0a0a0a] line-clamp-1">{c.title}</p>
-                              <p className="text-xs text-[#0a0a0a]/50 truncate max-w-[280px]">{c.description}</p>
+                              <p className="text-xs text-[#0a0a0a]/50 truncate">{c.description}</p>
                             </td>
-                            <td className="px-6 py-4 whitespace-nowrap">{renderStatusBadge(c.status)}</td>
+                            <td className="px-4 py-4 whitespace-nowrap">{renderStatusBadge(c.status)}</td>
                             {isInvestigator ? (
                               <>
-                                <td className="px-6 py-4 text-xs text-[#0a0a0a]/60 whitespace-nowrap">
+                                <td className="px-4 py-4 text-xs text-[#0a0a0a]/60 whitespace-nowrap">
                                   {formatDate(c.updated_at || c.created_at)}
                                 </td>
-                                <td className="px-6 py-4 text-right whitespace-nowrap min-w-[170px]">
+                                <td className="px-4 py-4 text-center whitespace-nowrap">
                                   <button
                                     onClick={() => viewCaseDetails(c.id)}
-                                    className="px-4 py-2 bg-[#CC2200] hover:bg-[#a81c00] text-white text-xs font-semibold rounded shadow-sm transition-colors whitespace-nowrap cursor-pointer"
+                                    className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-[#CC2200] hover:bg-[#a81c00] text-white text-xs font-bold rounded-md shadow-xs transition-colors whitespace-nowrap cursor-pointer w-full min-w-[135px] max-w-[150px] mx-auto"
                                   >
-                                    View Investigation
+                                    <Eye className="h-4 w-4 flex-shrink-0" />
+                                    <span>View Case</span>
                                   </button>
                                 </td>
                               </>
                             ) : (
                               <>
-                                <td className="px-6 py-4 text-xs text-[#0a0a0a]/60 whitespace-nowrap">
+                                <td className="px-4 py-4 text-xs text-[#0a0a0a]/60 whitespace-nowrap">
                                   {formatDate(c.incident_date)}
                                 </td>
-                                <td className="px-6 py-4 text-xs text-[#0a0a0a]/60 whitespace-nowrap">
+                                <td className="px-4 py-4 text-xs text-[#0a0a0a]/60 whitespace-nowrap">
                                   {formatDate(c.created_at)}
+                                </td>
+                                <td className="px-4 py-4 text-center whitespace-nowrap">
+                                  <button
+                                    onClick={() => viewCaseDetails(c.id)}
+                                    className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-[#CC2200] hover:bg-[#a81c00] text-white text-xs font-bold rounded-md shadow-xs transition-colors whitespace-nowrap cursor-pointer w-full min-w-[135px] max-w-[150px] mx-auto"
+                                  >
+                                    <Eye className="h-4 w-4 flex-shrink-0" />
+                                    <span>View Case</span>
+                                  </button>
                                 </td>
                               </>
                             )}
