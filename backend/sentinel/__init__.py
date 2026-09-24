@@ -7,6 +7,7 @@ Dual-Head Deepfake Detection and Manipulation Localization
 from .model import SentinelAIV17A, load_sentinel_model, SentinelModelConfig
 from .preprocessing import preprocess_image, validate_and_load_image
 from .inference import SentinelInferenceEngine, run_standalone_inference
+from .localization import create_localization_artifacts
 
 __all__ = [
     "SentinelAIV17A",
@@ -16,4 +17,5 @@ __all__ = [
     "validate_and_load_image",
     "SentinelInferenceEngine",
     "run_standalone_inference",
+    "create_localization_artifacts",
 ]

@@ -21,6 +21,7 @@ from app.models.models import (
 )
 from app.schemas.user import InvestigatorNoteCreate, InvestigatorNoteUpdate, InvestigatorNoteResponse
 from app.services.forensic_report import MockForensicScanner, generate_forensic_pdf_report
+from app.services.sentinel_service import analyze_investigation_evidence
 from app.models.user import User
 from app.utils.auth import SECRET_KEY, ALGORITHM, get_password_hash
 
@@ -1384,11 +1385,21 @@ def get_user_analyses(
     for a in results:
         analysis_list.append({
             "id": a.id,
+            "evidence_id": a.evidence_id,
             "file_name": a.evidence.original_name,
-            "model_name": a.model.model_name,
-            "version": a.model.version,
+            "model_name": a.model.model_name if a.model else "Sentinel AI V1.7-A",
+            "version": a.model_version or (a.model.version if a.model else "V1.7-A"),
             "result": a.result.value,
             "confidence_score": a.confidence_score,
+            "tampered_probability": a.tampered_probability,
+            "authentic_probability": a.authentic_probability,
+            "classification_threshold": a.classification_threshold,
+            "localization_available": a.localization_available,
+            "localization_threshold": a.localization_threshold,
+            "mask_path": a.mask_path,
+            "overlay_path": a.overlay_path,
+            "sha256_hash": a.sha256_hash or a.evidence.sha256_hash,
+            "device": a.device,
             "processing_time": a.processing_time,
             "analyzed_at": a.analyzed_at.isoformat() if a.analyzed_at else None
         })
@@ -1816,6 +1827,56 @@ def verify_case_access(c: InvestigationCase, user: User):
     raise HTTPException(status_code=403, detail="Forbidden: You are not assigned to this case.")
 
 # ─── 9. AI Forensic Scan & Report Endpoints ───
+
+@router.post("/cases/{case_id}/analyze")
+@router.post("/investigations/{case_id}/analyze")
+def analyze_investigation_endpoint(
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Investigation case not found")
+
+    verify_case_access(c, user)
+
+    evidence_files = db.query(EvidenceFile).filter(EvidenceFile.case_id == case_id).all()
+    if not evidence_files:
+        raise HTTPException(status_code=400, detail="No evidence files uploaded for this case to analyze.")
+
+    log_audit_event(
+        db, c.id, user.id, "Sentinel AI Analysis Initiated",
+        f"Sentinel AI V1.7-A dual-head analysis initiated on {len(evidence_files)} evidence files."
+    )
+
+    result_data = analyze_investigation_evidence(c, evidence_files, db, user)
+
+    log_audit_event(
+        db, c.id, user.id, "Sentinel AI Analysis Completed",
+        f"Sentinel AI V1.7-A dual-head analysis completed for case {c.case_number}."
+    )
+
+    return result_data
+
+
+@router.get("/analysis/artifacts/{filename}")
+def get_analysis_artifact(
+    filename: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    clean_filename = os.path.basename(filename)
+    candidates = [
+        os.path.join(UPLOAD_DIR, "analysis", clean_filename),
+        os.path.join(os.getcwd(), "uploads", "analysis", clean_filename),
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "uploads", "analysis", clean_filename)
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return FileResponse(p)
+    raise HTTPException(status_code=404, detail="Analysis artifact not found")
+
 
 @router.post("/cases/{case_id}/scan")
 def trigger_forensic_scan(
