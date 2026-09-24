@@ -156,11 +156,26 @@ def analyze_investigation_evidence(
 
     total_duration = round(time.perf_counter() - total_start_time, 2)
 
+    processed_count = sum(1 for r in results if r.get("status") == "completed")
+    failed_count = sum(1 for r in results if r.get("status") == "failed")
+    tampered_count = sum(1 for r in results if r.get("classification") == "tampered")
+    authentic_count = sum(1 for r in results if r.get("classification") == "authentic")
+
+    summary_stats = {
+        "total": len(evidence_files),
+        "processed": processed_count,
+        "failed": failed_count,
+        "pending": 0,
+        "tampered_count": tampered_count,
+        "authentic_count": authentic_count,
+        "manipulation_rate": round(tampered_count / max(processed_count, 1) * 100, 1)
+    }
+
     # 5. Persist aggregate ForensicScan record
     scan_record = ForensicScan(
         case_id=case.id,
         scanned_by=user.id,
-        scan_status="COMPLETED",
+        scan_status="COMPLETED" if failed_count == 0 else ("PARTIAL" if processed_count > 0 else "FAILED"),
         scan_duration=total_duration,
         evidence_count=len(results),
         results_json=json.dumps(results),
@@ -181,6 +196,7 @@ def analyze_investigation_evidence(
         "case_id": case.id,
         "status": "completed",
         "evidence_count": len(results),
+        "summary": summary_stats,
         "scan_id": scan_record.id,
         "scan_duration": total_duration,
         "results": results

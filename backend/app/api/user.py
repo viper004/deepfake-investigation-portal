@@ -20,7 +20,7 @@ from app.models.models import (
     ForensicScan, StatusEnum, FileTypeEnum, AIResultEnum, ReportTypeEnum, MediaTypeEnum
 )
 from app.schemas.user import InvestigatorNoteCreate, InvestigatorNoteUpdate, InvestigatorNoteResponse
-from app.services.forensic_report import MockForensicScanner, generate_forensic_pdf_report
+from app.services.forensic_report import generate_forensic_pdf_report
 from app.services.sentinel_service import analyze_investigation_evidence
 from app.models.user import User
 from app.utils.auth import SECRET_KEY, ALGORITHM, get_password_hash
@@ -1894,67 +1894,45 @@ def trigger_forensic_scan(
     if not evidence_files:
         raise HTTPException(status_code=400, detail="No evidence files uploaded for this case to analyze.")
 
-    # Generate mock analysis results
-    scan_results = MockForensicScanner.analyze_case_evidence(c, evidence_files)
+    # Call real Sentinel AI V1.7-A inference engine
+    res = analyze_investigation_evidence(c, evidence_files, db, user)
 
-    # Generate PDF report file
-    scan_time_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    pdf_filename = f"Forensic_Report_{c.case_number}_{scan_time_str}.pdf"
-    pdf_dir = os.path.join(os.getcwd(), "uploads", "reports")
-    pdf_path = os.path.join(pdf_dir, pdf_filename)
+    scan_id = res.get("scan_id")
+    scan = db.query(ForensicScan).filter(ForensicScan.id == scan_id).first() if scan_id else None
 
-    creator_user = db.query(User).filter(User.id == c.created_by).first()
-    investigator_user = db.query(User).filter(User.id == c.assigned_expert).first() if c.assigned_expert else None
+    # Generate initial PDF report using real results if available
+    try:
+        scan_time_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        pdf_filename = f"Forensic_Report_{c.case_number}_{scan_time_str}.pdf"
+        pdf_dir = os.path.join(os.getcwd(), "uploads", "reports")
+        pdf_path = os.path.join(pdf_dir, pdf_filename)
 
-    scan_meta = {
-        "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-        "scan_duration": 10.2,
-        "results": scan_results
-    }
+        creator_user = db.query(User).filter(User.id == c.created_by).first()
+        investigator_user = db.query(User).filter(User.id == c.assigned_expert).first() if c.assigned_expert else None
 
-    generate_forensic_pdf_report(c, creator_user, investigator_user, evidence_files, scan_meta, pdf_path)
+        scan_meta = {
+            "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+            "scan_duration": res.get("scan_duration", 0.0),
+            "results": res.get("results", [])
+        }
 
-    # Save to ForensicScan DB table
-    new_scan = ForensicScan(
-        case_id=c.id,
-        scanned_by=user.id,
-        scan_status="COMPLETED",
-        scan_duration=10.2,
-        evidence_count=len(evidence_files),
-        results_json=json.dumps(scan_results),
-        pdf_path=f"/uploads/reports/{pdf_filename}"
-    )
-    db.add(new_scan)
+        generate_forensic_pdf_report(c, creator_user, investigator_user, evidence_files, scan_meta, pdf_path)
 
-    # Record in Report table as well
-    report_record = Report(
-        case_id=c.id,
-        generated_by=user.id,
-        report_type=ReportTypeEnum.FORENSIC,
-        report_file=f"/uploads/reports/{pdf_filename}"
-    )
-    db.add(report_record)
-    db.commit()
-    db.refresh(new_scan)
-
-    # Log Audit Log Event
-    log_audit_event(
-        db,
-        c.id,
-        user.id,
-        "AI Forensic Scan Executed",
-        f"Simulated AI Forensic Scan executed for {len(evidence_files)} evidence files."
-    )
+        if scan:
+            scan.pdf_path = f"/uploads/reports/{pdf_filename}"
+            db.commit()
+    except Exception as pdf_err:
+        print(f"Warning: PDF report generation deferred or failed during scan: {pdf_err}")
 
     return {
-        "scan_id": new_scan.id,
+        "scan_id": scan_id,
         "case_id": c.id,
-        "scan_status": new_scan.scan_status,
-        "scan_duration": new_scan.scan_duration,
-        "evidence_count": new_scan.evidence_count,
-        "results": scan_results,
+        "scan_status": "COMPLETED",
+        "scan_duration": res.get("scan_duration", 0.0),
+        "evidence_count": res.get("evidence_count", len(evidence_files)),
+        "results": res.get("results", []),
         "pdf_url": f"/api/v1/user/cases/{c.id}/report/pdf",
-        "created_at": new_scan.created_at.isoformat() if new_scan.created_at else None
+        "created_at": scan.created_at.isoformat() if (scan and scan.created_at) else datetime.utcnow().isoformat()
     }
 
 
@@ -2005,28 +1983,50 @@ def download_forensic_pdf_report(
 
     verify_case_access(c, user)
 
+    evidence_files = db.query(EvidenceFile).filter(EvidenceFile.case_id == case_id).all()
+    if not evidence_files:
+        raise HTTPException(status_code=400, detail="No evidence files uploaded for this case to generate a report.")
+
     scan = db.query(ForensicScan).filter(ForensicScan.case_id == case_id).order_by(ForensicScan.id.desc()).first()
-    
-    if not scan or not scan.pdf_path:
-        raise HTTPException(status_code=404, detail="Forensic report PDF has not been generated for this case.")
 
-    relative_path = scan.pdf_path.lstrip("/")
-    abs_path = os.path.join(os.getcwd(), relative_path)
+    pdf_file_exists = False
+    if scan and scan.pdf_path:
+        relative_path = scan.pdf_path.lstrip("/")
+        abs_path = os.path.join(os.getcwd(), relative_path)
+        if os.path.exists(abs_path):
+            pdf_file_exists = True
 
-    if not os.path.exists(abs_path):
-        evidence_files = db.query(EvidenceFile).filter(EvidenceFile.case_id == case_id).all()
-        try:
-            results = json.loads(scan.results_json)
-        except Exception:
-            results = []
+    if not pdf_file_exists:
+        # Run real Sentinel AI V1.7-A dual-head analysis pipeline
+        ai_res = analyze_investigation_evidence(c, evidence_files, db, user)
+        scan_id = ai_res.get("scan_id")
+        scan = db.query(ForensicScan).filter(ForensicScan.id == scan_id).first() if scan_id else None
+
+        scan_time_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        pdf_filename = f"Forensic_Report_{c.case_number}_{scan_time_str}.pdf"
+        pdf_dir = os.path.join(os.getcwd(), "uploads", "reports")
+        abs_path = os.path.join(pdf_dir, pdf_filename)
+
         creator_user = db.query(User).filter(User.id == c.created_by).first()
         investigator_user = db.query(User).filter(User.id == c.assigned_expert).first() if c.assigned_expert else None
+
         scan_meta = {
-            "created_at": scan.created_at.strftime("%Y-%m-%d %H:%M UTC") if scan.created_at else datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-            "scan_duration": scan.scan_duration,
-            "results": results
+            "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+            "scan_duration": ai_res.get("scan_duration", 0.0),
+            "results": ai_res.get("results", [])
         }
+
         generate_forensic_pdf_report(c, creator_user, investigator_user, evidence_files, scan_meta, abs_path)
+
+        if scan:
+            scan.pdf_path = f"/uploads/reports/{pdf_filename}"
+            db.commit()
+
+        # Log audit event
+        log_audit_event(
+            db, c.id, user.id, "Forensic PDF Report Generated",
+            f"Official Sentinel AI Forensic PDF report generated for case {c.case_number}."
+        )
 
     filename = os.path.basename(abs_path)
     return FileResponse(

@@ -2742,15 +2742,22 @@ function UserDashboardContent() {
                                   </p>
                                 </div>
                               </div>
-                              <span className="text-[10px] font-bold px-2.5 py-1 rounded bg-white text-slate-600 border border-slate-200">
-                                Demonstration Scan
+                              <span className="text-[10px] font-bold px-2.5 py-1 rounded bg-purple-100 text-purple-800 border border-purple-200">
+                                Sentinel AI V1.7-A Dual-Head
                               </span>
                             </div>
 
                             {/* Evidence Result Cards */}
                             <div className="space-y-4">
                               {scanResult.results?.map((res: any, idx: number) => {
-                                const isManipulated = res.assessment_code === "DEEPFAKE" || res.deepfake_probability >= 50;
+                                const isManipulated = res.classification === "tampered" || res.assessment_code === "DEEPFAKE" || (res.tampered_probability !== undefined ? res.tampered_probability >= 0.40 : res.deepfake_probability >= 50);
+                                const tamperedPct = res.tampered_probability !== undefined 
+                                  ? (res.tampered_probability * 100).toFixed(1) 
+                                  : (res.deepfake_probability !== undefined ? res.deepfake_probability : 0);
+                                const authenticPct = res.authentic_probability !== undefined
+                                  ? (res.authentic_probability * 100).toFixed(1)
+                                  : (100 - parseFloat(tamperedPct as string)).toFixed(1);
+
                                 return (
                                   <div
                                     key={idx}
@@ -2763,7 +2770,7 @@ function UserDashboardContent() {
                                     <div className="flex justify-between items-start flex-wrap gap-2">
                                       <div>
                                         <span className="text-[10px] font-bold uppercase text-slate-400">Evidence 0{idx + 1}</span>
-                                        <h4 className="text-xs font-bold text-slate-900">{res.file_name}</h4>
+                                        <h4 className="text-xs font-bold text-slate-900">{res.file_name || res.original_name}</h4>
                                       </div>
                                       <span
                                         className={`px-3 py-1 rounded text-xs font-extrabold border ${
@@ -2772,7 +2779,7 @@ function UserDashboardContent() {
                                             : "bg-emerald-100 text-emerald-800 border-emerald-300"
                                         }`}
                                       >
-                                        {res.assessment}
+                                        {isManipulated ? "TAMPERED / MANIPULATED" : "AUTHENTIC MEDIA"}
                                       </span>
                                     </div>
 
@@ -2780,30 +2787,64 @@ function UserDashboardContent() {
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-white/80 p-3 rounded border border-slate-200 text-xs">
                                       <div>
                                         <div className="flex justify-between text-[11px] font-bold mb-1">
-                                          <span className="text-slate-600">Deepfake Probability:</span>
-                                          <span className={isManipulated ? "text-rose-600" : "text-emerald-600"}>{res.deepfake_probability}%</span>
+                                          <span className="text-slate-600">Tampered Probability:</span>
+                                          <span className={isManipulated ? "text-rose-600 font-extrabold" : "text-slate-600"}>{tamperedPct}%</span>
                                         </div>
                                         <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
                                           <div
-                                            className={`h-full rounded-full ${isManipulated ? "bg-rose-500" : "bg-emerald-500"}`}
-                                            style={{ width: `${res.deepfake_probability}%` }}
+                                            className={`h-full rounded-full ${isManipulated ? "bg-rose-500" : "bg-slate-400"}`}
+                                            style={{ width: `${tamperedPct}%` }}
                                           />
                                         </div>
                                       </div>
 
                                       <div>
                                         <div className="flex justify-between text-[11px] font-bold mb-1">
-                                          <span className="text-slate-600">Manipulation Confidence:</span>
-                                          <span className="text-slate-900">{res.manipulation_confidence}%</span>
+                                          <span className="text-slate-600">Authentic Probability:</span>
+                                          <span className={!isManipulated ? "text-emerald-600 font-extrabold" : "text-slate-600"}>{authenticPct}%</span>
                                         </div>
                                         <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
                                           <div
-                                            className="h-full rounded-full bg-indigo-500"
-                                            style={{ width: `${res.manipulation_confidence}%` }}
+                                            className={`h-full rounded-full ${!isManipulated ? "bg-emerald-500" : "bg-slate-400"}`}
+                                            style={{ width: `${authenticPct}%` }}
                                           />
                                         </div>
                                       </div>
                                     </div>
+
+                                    {/* Localization Artifact Display */}
+                                    {(res.overlay_artifact_path || res.overlay_path) && (
+                                      <div className="mt-3 pt-3 border-t border-slate-200">
+                                        <div className="flex items-center justify-between mb-2">
+                                          <span className="text-[11px] font-bold text-slate-700">Localization Map (Threshold: {res.localization_threshold || 0.35})</span>
+                                          <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                                            Artifact Generated
+                                          </span>
+                                        </div>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-1">
+                                          {res.overlay_artifact_path && (
+                                            <div className="space-y-1">
+                                              <span className="text-[10px] text-slate-500 font-medium">Heatmap Overlay</span>
+                                              <img 
+                                                src={`${BACKEND_URL}${res.overlay_artifact_path.startsWith('/') ? '' : '/'}${res.overlay_artifact_path}`}
+                                                alt="Localization Overlay"
+                                                className="w-full h-40 object-contain rounded border border-slate-200 bg-slate-900"
+                                              />
+                                            </div>
+                                          )}
+                                          {res.mask_artifact_path && (
+                                            <div className="space-y-1">
+                                              <span className="text-[10px] text-slate-500 font-medium">Binary Detection Mask</span>
+                                              <img 
+                                                src={`${BACKEND_URL}${res.mask_artifact_path.startsWith('/') ? '' : '/'}${res.mask_artifact_path}`}
+                                                alt="Localization Mask"
+                                                className="w-full h-40 object-contain rounded border border-slate-200 bg-black"
+                                              />
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    )}
 
                                     {res.artifacts_summary && (
                                       <p className="text-[11px] text-slate-600 italic font-medium">
