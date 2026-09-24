@@ -8,3 +8,6 @@ python-jose[cryptography]
 pydantic
 pydantic-settings
 reportlab
+torch
+torchvision
+timm
