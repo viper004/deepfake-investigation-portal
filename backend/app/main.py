@@ -194,6 +194,29 @@ def init_db_updates():
                 FOREIGN KEY (scanned_by) REFERENCES users(id) ON DELETE CASCADE
             ) ENGINE=InnoDB;
         """))
+
+        # Add Sentinel forensic columns to ai_analysis if table exists
+        ai_analysis_cols = [
+            ("tampered_probability", "FLOAT NULL"),
+            ("authentic_probability", "FLOAT NULL"),
+            ("classification_threshold", "FLOAT NULL DEFAULT 0.40"),
+            ("localization_available", "TINYINT(1) NULL DEFAULT 0"),
+            ("localization_threshold", "FLOAT NULL DEFAULT 0.35"),
+            ("mask_path", "VARCHAR(500) NULL"),
+            ("overlay_path", "VARCHAR(500) NULL"),
+            ("device", "VARCHAR(50) NULL"),
+            ("model_version", "VARCHAR(50) NULL"),
+            ("sha256_hash", "VARCHAR(64) NULL"),
+            ("details_json", "JSON NULL")
+        ]
+        for col_name, col_def in ai_analysis_cols:
+            try:
+                res_col = db.execute(text(f"SHOW COLUMNS FROM ai_analysis LIKE '{col_name}'")).fetchone()
+                if not res_col:
+                    db.execute(text(f"ALTER TABLE ai_analysis ADD COLUMN {col_name} {col_def}"))
+            except Exception as col_err:
+                print(f"ai_analysis col check note ({col_name}):", col_err)
+
         db.commit()
     except Exception as e:
         print("Database migration/update error:", e)
@@ -742,9 +765,23 @@ seed_synthetic_audit_logs()
 
 app = FastAPI(title="Sentinel AI API")
 
+@app.on_event("startup")
+def startup_load_sentinel_model():
+    """
+    Load Sentinel AI V1.7-A model once on startup and keep resident in memory.
+    """
+    try:
+        from sentinel.inference import SentinelInferenceEngine
+        engine = SentinelInferenceEngine.get_instance()
+        print(f"[Startup] Sentinel AI V1.7-A model loaded successfully on device: {engine.device}")
+    except Exception as e:
+        print(f"[Startup Warning] Could not preload Sentinel AI model: {e}")
+
 # Disabled public StaticFiles directory for uploads to secure evidence files.
 # Evidence files are now served via authenticated /api/v1/user/evidence/{id}/download endpoints.
 os.makedirs("uploads", exist_ok=True)
+os.makedirs("uploads/analysis", exist_ok=True)
+os.makedirs("uploads/reports", exist_ok=True)
 # app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # Configure CORS so frontend can call backend
