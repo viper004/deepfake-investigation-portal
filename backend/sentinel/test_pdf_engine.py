@@ -77,11 +77,11 @@ def test_pdf_report_engine():
         assert os.path.getsize(pdf_result_path) > 5000, f"Generated PDF file size is suspiciously small: {os.path.getsize(pdf_result_path)} bytes"
 
         print(f"✓ Generated PDF report successfully ({os.path.getsize(pdf_result_path)} bytes) at: {pdf_result_path}")
-        return 0
 
     finally:
         db.close()
 
 
 if __name__ == "__main__":
-    sys.exit(test_pdf_report_engine())
+    test_pdf_report_engine()
+    sys.exit(0)

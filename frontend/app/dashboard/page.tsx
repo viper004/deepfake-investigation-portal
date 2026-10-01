@@ -34,6 +34,7 @@ import {
   FileUp,
   ExternalLink,
   ChevronDown,
+  ChevronUp,
   Notebook,
   Play,
   RotateCcw,
@@ -45,7 +46,10 @@ import {
   Maximize2,
   AlertTriangle,
   MessageSquare,
-  MessageCircle
+  MessageCircle,
+  Paperclip,
+  Image as ImageIcon,
+  Film
 } from "lucide-react";
 import WorkspaceSwitcher from "@/components/WorkspaceSwitcher";
 
@@ -145,6 +149,25 @@ interface AuditLogType {
   timestamp: string | null;
 }
 
+interface AttachmentType {
+  id: number;
+  message_id?: number | null;
+  case_id: number;
+  uploaded_by: number;
+  uploaded_by_name: string;
+  uploaded_by_role: string;
+  original_filename: string;
+  mime_type: string;
+  file_size: number;
+  sha256_hash: string;
+  status: string;
+  scan_status: string;
+  evidence_id?: number | null;
+  is_evidence?: boolean;
+  created_at: string;
+  download_url: string;
+}
+
 interface MessageType {
   id: number;
   case_id: number;
@@ -153,6 +176,7 @@ interface MessageType {
   sender_role: string;
   is_me: boolean;
   message: string;
+  attachments?: AttachmentType[];
   created_at: string | null;
   read_at?: string | null;
 }
@@ -217,21 +241,32 @@ function UserDashboardContent() {
   const [recentReports, setRecentReports] = useState<any[]>([]);
   const [recentLoading, setRecentLoading] = useState(true);
 
-  // Cases List View State (My Cases)
+  // Cases List View State (My Cases / Assigned Cases)
   const [cases, setCases] = useState<CaseType[]>([]);
   const [casesTotal, setCasesTotal] = useState(0);
   const [casesLoading, setCasesLoading] = useState(true);
+  const [casesError, setCasesError] = useState<string | null>(null);
   const [casesPage, setCasesPage] = useState(1);
   const [casesSearch, setCasesSearch] = useState("");
   const [casesStatusFilter, setCasesStatusFilter] = useState("");
   const [casesSortBy, setCasesSortBy] = useState("newest");
 
+  // All Cases View State (All investigation cases across portal for Investigators)
+  const [allCases, setAllCases] = useState<CaseType[]>([]);
+  const [allCasesTotal, setAllCasesTotal] = useState(0);
+  const [allCasesLoading, setAllCasesLoading] = useState(false);
+  const [allCasesError, setAllCasesError] = useState<string | null>(null);
+  const [allCasesPage, setAllCasesPage] = useState(1);
+  const [allCasesSearch, setAllCasesSearch] = useState("");
+  const [allCasesStatusFilter, setAllCasesStatusFilter] = useState("");
+  const [allCasesSortBy, setAllCasesSortBy] = useState("newest");
+
   // Open Cases View State (Unassigned cases for Investigators)
   const [openCases, setOpenCases] = useState<CaseType[]>([]);
   const [openCasesTotal, setOpenCasesTotal] = useState(0);
   const [openCasesLoading, setOpenCasesLoading] = useState(false);
-  const [openCasesPage, setOpenCasesPage] = useState(1);
   const [openCasesSearch, setOpenCasesSearch] = useState("");
+  const [openCasesPage, setOpenCasesPage] = useState(1);
   const [isCreateCaseModalOpen, setIsCreateCaseModalOpen] = useState(false);
   const [createCaseForm, setCreateCaseForm] = useState({ title: "", description: "", incident_date: "" });
 
@@ -263,6 +298,21 @@ function UserDashboardContent() {
     (session?.user as any)?.role_id === 1 || 
     (Array.isArray(session?.user?.roles) && session.user.roles.includes(1)) ||
     session?.user?.email === "superuser@example.com";
+
+  const currentUserId = (session?.user as any)?.id ? Number((session?.user as any)?.id) : null;
+  const [deleteEvidenceModalItem, setDeleteEvidenceModalItem] = useState<any | null>(null);
+  const [isDeletingEvidence, setIsDeletingEvidence] = useState(false);
+
+  const canDeleteEvidenceItem = (ev: any, cStatus?: string) => {
+    if (isAdmin) return true;
+    const evUploaderId = ev.uploaded_by !== undefined ? Number(ev.uploaded_by) : (ev.uploaded_by_id !== undefined ? Number(ev.uploaded_by_id) : null);
+    if (isInvestigator) {
+      return evUploaderId !== null && evUploaderId === currentUserId;
+    }
+    const effStatus = cStatus || ev.case_status || (ev.case && ev.case.status);
+    return evUploaderId !== null && evUploaderId === currentUserId && effStatus === "DRAFT";
+  };
+
   const [isSubmitConfirmModalOpen, setIsSubmitConfirmModalOpen] = useState(false);
   const [isOpenConfirmModalOpen, setIsOpenConfirmModalOpen] = useState(false);
   const [isClaimConfirmModalOpen, setIsClaimConfirmModalOpen] = useState(false);
@@ -333,6 +383,8 @@ function UserDashboardContent() {
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [newMessageText, setNewMessageText] = useState("");
   const [sendingMessage, setSendingMessage] = useState(false);
+  const [chatAttachment, setChatAttachment] = useState<File | null>(null);
+  const chatFileInputRef = useRef<HTMLInputElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   // Citizen Submit Case for Review
@@ -677,11 +729,12 @@ function UserDashboardContent() {
     }
   }, [session?.accessToken, fetchStats, fetchRecent, fetchProfile]);
 
-  // ─── Case Fetching ───
+  // ─── Case Fetching (Assigned Cases / My Cases) ───
   const fetchCases = useCallback(async () => {
     if (!session?.accessToken) return;
     try {
       setCasesLoading(true);
+      setCasesError(null);
       const queryParams = new URLSearchParams({
         page: casesPage.toString(),
         limit: "10",
@@ -689,26 +742,72 @@ function UserDashboardContent() {
         status_filter: casesStatusFilter,
         sort_by: casesSortBy
       });
+      if (isInvestigator) {
+        queryParams.append("scope", "assigned");
+      }
       const res = await fetch(`${BACKEND_URL}/api/v1/user/cases?${queryParams}`, {
         headers: { "Authorization": `Bearer ${session.accessToken}` }
       });
       if (res.ok) {
         const data = await res.json();
-        setCases(data.cases);
-        setCasesTotal(data.total);
+        setCases(data.cases || []);
+        setCasesTotal(data.total || 0);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setCasesError(errData.detail || "Unable to load cases. Please try again.");
       }
     } catch (e) {
       console.error(e);
+      setCasesError("Unable to load cases. Please try again.");
     } finally {
       setCasesLoading(false);
     }
-  }, [session, casesPage, casesSearch, casesStatusFilter, casesSortBy]);
+  }, [session, casesPage, casesSearch, casesStatusFilter, casesSortBy, isInvestigator]);
 
   useEffect(() => {
     if ((activeTab === "My Cases" || activeTab === "Assigned Cases") && !selectedCaseId) {
       fetchCases();
     }
   }, [activeTab, selectedCaseId, fetchCases]);
+
+  // ─── All Cases Fetching ───
+  const fetchAllCases = useCallback(async () => {
+    if (!session?.accessToken) return;
+    try {
+      setAllCasesLoading(true);
+      setAllCasesError(null);
+      const queryParams = new URLSearchParams({
+        page: allCasesPage.toString(),
+        limit: "10",
+        search: allCasesSearch,
+        status_filter: allCasesStatusFilter,
+        sort_by: allCasesSortBy,
+        scope: "all"
+      });
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/cases?${queryParams}`, {
+        headers: { "Authorization": `Bearer ${session.accessToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAllCases(data.cases || []);
+        setAllCasesTotal(data.total || 0);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setAllCasesError(errData.detail || "Unable to load cases. Please try again.");
+      }
+    } catch (e) {
+      console.error(e);
+      setAllCasesError("Unable to load cases. Please try again.");
+    } finally {
+      setAllCasesLoading(false);
+    }
+  }, [session, allCasesPage, allCasesSearch, allCasesStatusFilter, allCasesSortBy]);
+
+  useEffect(() => {
+    if (activeTab === "All Cases" && !selectedCaseId) {
+      fetchAllCases();
+    }
+  }, [activeTab, selectedCaseId, fetchAllCases]);
 
   // ─── Open Cases Fetching ───
   const fetchOpenCases = useCallback(async () => {
@@ -726,8 +825,8 @@ function UserDashboardContent() {
       });
       if (res.ok) {
         const data = await res.json();
-        setOpenCases(data.cases);
-        setOpenCasesTotal(data.total);
+        setOpenCases(data.cases || []);
+        setOpenCasesTotal(data.total || 0);
       }
     } catch (e) {
       console.error(e);
@@ -737,7 +836,7 @@ function UserDashboardContent() {
   }, [session, openCasesPage, openCasesSearch]);
 
   useEffect(() => {
-    if ((activeTab === "Open Cases" || activeTab === "All Cases") && !selectedCaseId) {
+    if (activeTab === "Open Cases" && !selectedCaseId) {
       fetchOpenCases();
     }
   }, [activeTab, selectedCaseId, fetchOpenCases]);
@@ -1074,20 +1173,45 @@ function UserDashboardContent() {
 
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!newMessageText.trim() || !selectedCaseId || !session?.accessToken) return;
+    if ((!newMessageText.trim() && !chatAttachment) || !selectedCaseId || !session?.accessToken) return;
 
     const msgText = newMessageText.trim();
     setNewMessageText("");
     setSendingMessage(true);
 
     try {
+      let attachmentIds: number[] = [];
+      if (chatAttachment) {
+        const formData = new FormData();
+        formData.append("file", chatAttachment);
+        const upRes = await fetch(`${BACKEND_URL}/api/v1/user/cases/${selectedCaseId}/attachments/upload`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${session.accessToken}`
+          },
+          body: formData
+        });
+        if (!upRes.ok) {
+          const errData = await upRes.json().catch(() => ({}));
+          showToast(errData.detail || "Failed to upload attachment", "error");
+          setSendingMessage(false);
+          setNewMessageText(msgText);
+          return;
+        }
+        const attData = await upRes.json();
+        attachmentIds.push(attData.id);
+      }
+
       const res = await fetch(`${BACKEND_URL}/api/v1/user/cases/${selectedCaseId}/messages`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${session.accessToken}`
         },
-        body: JSON.stringify({ message: msgText })
+        body: JSON.stringify({
+          message: msgText,
+          attachment_ids: attachmentIds
+        })
       });
 
       if (res.ok) {
@@ -1097,6 +1221,7 @@ function UserDashboardContent() {
             (new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()) || (a.id - b.id)
           )
         );
+        setChatAttachment(null);
         setTimeout(() => scrollToBottom(true), 50);
         fetchCaseDetail(selectedCaseId);
         fetchNotifications();
@@ -1111,6 +1236,32 @@ function UserDashboardContent() {
       setNewMessageText(msgText);
     } finally {
       setSendingMessage(false);
+    }
+  };
+
+  const handleDeleteChatAttachment = async (attachmentId: number) => {
+    if (!confirm("Are you sure you want to delete this attachment?")) return;
+    if (!selectedCaseId || !session?.accessToken) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/cases/${selectedCaseId}/attachments/${attachmentId}`, {
+        method: "DELETE",
+        headers: { "Authorization": `Bearer ${session.accessToken}` }
+      });
+      if (res.ok) {
+        showToast("Attachment deleted successfully", "success");
+        setCaseMessages(prev =>
+          prev.map(m => ({
+            ...m,
+            attachments: m.attachments?.filter(a => a.id !== attachmentId)
+          }))
+        );
+        fetchCaseDetail(selectedCaseId);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.detail || "Unable to delete attachment", "error");
+      }
+    } catch (e) {
+      showToast("Error deleting attachment", "error");
     }
   };
 
@@ -1406,25 +1557,42 @@ function UserDashboardContent() {
     }
   }, [activeTab, fetchEvidence]);
 
-  const handleDeleteEvidence = async (evidenceId: number) => {
-    if (!session?.accessToken || !confirm("Are you sure you want to delete this evidence? All analyses will be lost.")) return;
+  const handleDeleteEvidence = (evOrId: any) => {
+    if (typeof evOrId === "object" && evOrId !== null) {
+      setDeleteEvidenceModalItem(evOrId);
+    } else {
+      const found = evidence.find((item) => item.id === evOrId) || (caseDetail?.evidence || []).find((item: any) => item.id === evOrId);
+      if (found) {
+        setDeleteEvidenceModalItem(found);
+      } else {
+        setDeleteEvidenceModalItem({ id: evOrId, original_name: `Evidence #${evOrId}` });
+      }
+    }
+  };
+
+  const confirmDeleteEvidenceModal = async () => {
+    if (!deleteEvidenceModalItem || !session?.accessToken) return;
+    setIsDeletingEvidence(true);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/v1/user/evidence/${evidenceId}`, {
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/evidence/${deleteEvidenceModalItem.id}`, {
         method: "DELETE",
         headers: { "Authorization": `Bearer ${session.accessToken}` }
       });
       if (res.ok) {
-        showToast("Evidence file deleted successfully", "success");
+        showToast("Evidence deleted successfully.", "success");
         if (selectedCaseId) fetchCaseDetail(selectedCaseId);
         fetchEvidence();
         refreshAll();
+        setDeleteEvidenceModalItem(null);
       } else {
         const data = await res.json().catch(() => ({}));
-        showToast(data.detail || "Failed to delete evidence file", "error");
+        showToast(data.detail || "Unable to delete evidence.", "error");
       }
     } catch (err) {
       console.error(err);
-      showToast("Network error while deleting evidence", "error");
+      showToast("Unable to delete evidence.", "error");
+    } finally {
+      setIsDeletingEvidence(false);
     }
   };
 
@@ -2271,6 +2439,17 @@ function UserDashboardContent() {
                       </div>
                     ))}
                   </div>
+                ) : casesError ? (
+                  <div className="p-12 text-center space-y-3">
+                    <ShieldAlert className="h-10 w-10 text-rose-500 mx-auto" />
+                    <p className="text-base font-bold text-[#0a0a0a]/80">{casesError}</p>
+                    <button
+                      onClick={() => fetchCases()}
+                      className="px-4 py-2 bg-slate-800 text-white rounded-md text-xs font-bold hover:bg-[#CC2200] transition-colors cursor-pointer"
+                    >
+                      Retry
+                    </button>
+                  </div>
                 ) : cases.length === 0 ? (
                   <div className="p-12 text-center text-sm text-[#0a0a0a]/50">
                     No investigation cases match your filters.
@@ -2668,11 +2847,11 @@ function UserDashboardContent() {
                                   Download
                                 </a>
 
-                                {/* Delete - Only before submission for user */}
-                                {(!isInvestigator && (caseDetail.status === "DRAFT")) && (
+                                {/* Delete Action */}
+                                {canDeleteEvidenceItem(ev, caseDetail.status) && (
                                   <button
-                                    onClick={() => handleDeleteEvidence(ev.id)}
-                                    className="p-1.5 border border-rose-200 rounded text-rose-600 hover:bg-rose-50"
+                                    onClick={() => handleDeleteEvidence(ev)}
+                                    className="p-1.5 border border-rose-200 rounded text-rose-600 hover:bg-rose-50 cursor-pointer"
                                     title="Delete"
                                   >
                                     <Trash2 className="h-3.5 w-3.5" />
@@ -2828,7 +3007,7 @@ function UserDashboardContent() {
                                               <img 
                                                 src={`${BACKEND_URL}${res.overlay_artifact_path.startsWith('/') ? '' : '/'}${res.overlay_artifact_path}`}
                                                 alt="Localization Overlay"
-                                                className="w-full h-40 object-contain rounded border border-slate-200 bg-slate-900"
+                                                className="w-full h-40 object-contain rounded border border-slate-200 bg-slate-50"
                                               />
                                             </div>
                                           )}
@@ -2838,7 +3017,7 @@ function UserDashboardContent() {
                                               <img 
                                                 src={`${BACKEND_URL}${res.mask_artifact_path.startsWith('/') ? '' : '/'}${res.mask_artifact_path}`}
                                                 alt="Localization Mask"
-                                                className="w-full h-40 object-contain rounded border border-slate-200 bg-black"
+                                                className="w-full h-40 object-contain rounded border border-slate-200 bg-slate-50"
                                               />
                                             </div>
                                           )}
@@ -3021,13 +3200,178 @@ function UserDashboardContent() {
             </div>
           )}
 
-          {/* ──────────────── ALL CASES VIEW (UNASSIGNED FOR INVESTIGATORS) ──────────────── */}
-          {(activeTab === "Open Cases" || activeTab === "All Cases") && !selectedCaseId && (
+          {/* ──────────────── ALL CASES VIEW (FOR INVESTIGATORS) ──────────────── */}
+          {activeTab === "All Cases" && !selectedCaseId && (
             <div className="space-y-6 animate-scale-up">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
                   <h1 className="text-2xl font-bold tracking-tight">All Cases</h1>
-                  <p className="text-sm text-[#0a0a0a]/50">View all cases in the system. You may only claim unassigned cases.</p>
+                  <p className="text-sm text-[#0a0a0a]/50">View and review all investigation cases in the system authorized for your role.</p>
+                </div>
+              </div>
+
+              {/* Search & Filter Toolbar */}
+              <div className="flex flex-col sm:flex-row gap-3 bg-white p-4 border border-[#e5e5e5] rounded-lg shadow-sm">
+                
+                {/* Search */}
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#0a0a0a]/40" />
+                  <input
+                    type="text"
+                    placeholder="Search all cases by case #, title, or reporter..."
+                    value={allCasesSearch}
+                    onChange={(e) => { setAllCasesSearch(e.target.value); setAllCasesPage(1); }}
+                    className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-[#e5e5e5] rounded-md text-sm outline-none focus:ring-1 focus:ring-[#CC2200] focus:border-[#CC2200] transition-colors"
+                  />
+                </div>
+
+                {/* Status Filter */}
+                <div className="flex gap-2">
+                  <select
+                    value={allCasesStatusFilter}
+                    onChange={(e) => { setAllCasesStatusFilter(e.target.value); setAllCasesPage(1); }}
+                    className="bg-slate-50 border border-[#e5e5e5] rounded-md text-sm px-3 py-2 outline-none focus:ring-1 focus:ring-[#CC2200] text-[#0a0a0a]"
+                  >
+                    <option value="">All Statuses</option>
+                    <option value="CASE_FILED">Case Filed (Unassigned)</option>
+                    <option value="CASE_UNDER_INVESTIGATION">Under Investigation</option>
+                    <option value="CLOSED">Closed</option>
+                    <option value="DRAFT">Draft</option>
+                  </select>
+
+                  {/* Sort */}
+                  <select
+                    value={allCasesSortBy}
+                    onChange={(e) => { setAllCasesSortBy(e.target.value); setAllCasesPage(1); }}
+                    className="bg-slate-50 border border-[#e5e5e5] rounded-md text-sm px-3 py-2 outline-none focus:ring-1 focus:ring-[#CC2200] text-[#0a0a0a]"
+                  >
+                    <option value="newest">Newest First</option>
+                    <option value="oldest">Oldest First</option>
+                  </select>
+                </div>
+
+              </div>
+
+              {/* All Cases Table */}
+              <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm overflow-hidden">
+                {allCasesLoading ? (
+                  <div className="p-8 space-y-4">
+                    {[1, 2, 3, 4].map(i => (
+                      <div key={i} className="animate-pulse flex items-center justify-between h-12 bg-slate-50 rounded px-4">
+                        <div className="h-4 w-24 bg-slate-200 rounded" />
+                        <div className="h-4 w-48 bg-slate-200 rounded" />
+                        <div className="h-4 w-12 bg-slate-200 rounded" />
+                      </div>
+                    ))}
+                  </div>
+                ) : allCasesError ? (
+                  <div className="p-12 text-center space-y-3">
+                    <ShieldAlert className="h-10 w-10 text-rose-500 mx-auto" />
+                    <p className="text-base font-bold text-[#0a0a0a]/80">{allCasesError}</p>
+                    <button
+                      onClick={() => fetchAllCases()}
+                      className="px-4 py-2 bg-slate-800 text-white rounded-md text-xs font-bold hover:bg-[#CC2200] transition-colors cursor-pointer"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : allCases.length === 0 ? (
+                  <div className="p-12 text-center space-y-3">
+                    <ShieldAlert className="h-12 w-12 text-[#0a0a0a]/20 mx-auto" />
+                    <p className="text-base font-bold text-[#0a0a0a]/70">No investigation cases match your filters.</p>
+                    <p className="text-xs text-[#0a0a0a]/40 max-w-sm mx-auto">
+                      Try adjusting your search criteria or status filter options.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50/80 border-b border-[#e5e5e5] text-[#0a0a0a]/60 font-bold uppercase text-[11px] tracking-wider">
+                          <th className="py-3.5 px-4">CASE CODE</th>
+                          <th className="py-3.5 px-4">TITLE</th>
+                          <th className="py-3.5 px-4">REPORTED BY</th>
+                          <th className="py-3.5 px-4">ASSIGNED INVESTIGATOR</th>
+                          <th className="py-3.5 px-4">STATUS</th>
+                          <th className="py-3.5 px-4">SUBMITTED DATE</th>
+                          <th className="py-3.5 px-4 text-center">ACTION</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#e5e5e5]">
+                        {allCases.map((c: any) => {
+                          const isAssignedToMe = (c.is_assigned_to_me || c.assigned_expert_id === session?.user?.id || c.assigned_investigator_id === session?.user?.id);
+                          const isUnassigned = (c.status === "CASE_FILED" && !c.assigned_expert_id && !c.assigned_investigator_id);
+                          return (
+                            <tr key={c.id} className="hover:bg-slate-50/50 transition-colors">
+                              <td className="py-3.5 px-4 font-mono font-bold text-[#CC2200]">{c.case_number}</td>
+                              <td className="py-3.5 px-4 font-bold text-[#0a0a0a]">{c.title}</td>
+                              <td className="py-3.5 px-4 text-[#0a0a0a]/80 font-medium">{c.creator_name || "Citizen"}</td>
+                              <td className="py-3.5 px-4 text-[#0a0a0a]/70 font-medium">
+                                {c.assigned_expert_name || c.assigned_investigator_name || (
+                                  <span className="text-amber-600 italic">Unassigned</span>
+                                )}
+                              </td>
+                              <td className="py-3.5 px-4">
+                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                                  c.status === "CLOSED"
+                                    ? "bg-slate-100 text-slate-700"
+                                    : c.status === "CASE_UNDER_INVESTIGATION"
+                                    ? "bg-blue-100 text-blue-700"
+                                    : c.status === "CASE_FILED"
+                                    ? "bg-amber-100 text-amber-700"
+                                    : "bg-gray-100 text-gray-700"
+                                }`}>
+                                  {c.status}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-4 text-[#0a0a0a]/60">
+                                {c.submitted_at ? new Date(c.submitted_at).toLocaleDateString("en-GB") : (c.created_at ? new Date(c.created_at).toLocaleDateString("en-GB") : "N/A")}
+                              </td>
+                              <td className="py-3.5 px-4 text-center">
+                                {isAssignedToMe ? (
+                                  <button
+                                    onClick={() => setSelectedCaseId(c.id)}
+                                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded bg-[#CC2200] hover:opacity-90 text-white text-xs font-bold transition-colors shadow-xs cursor-pointer"
+                                  >
+                                    <FolderSearch className="h-3.5 w-3.5" />
+                                    Open Workspace
+                                  </button>
+                                ) : isUnassigned ? (
+                                  <button
+                                    onClick={() => handleOpenViewCaseModal(c)}
+                                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded bg-slate-800 hover:bg-[#CC2200] text-white text-xs font-bold transition-colors shadow-xs cursor-pointer"
+                                  >
+                                    <Eye className="h-3.5 w-3.5" />
+                                    View / Claim Case
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => setSelectedCaseId(c.id)}
+                                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold transition-colors shadow-xs cursor-pointer"
+                                  >
+                                    <Eye className="h-3.5 w-3.5" />
+                                    View Details
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ──────────────── OPEN CASES VIEW (UNASSIGNED) ──────────────── */}
+          {activeTab === "Open Cases" && !selectedCaseId && (
+            <div className="space-y-6 animate-scale-up">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h1 className="text-2xl font-bold tracking-tight">Open Cases</h1>
+                  <p className="text-sm text-[#0a0a0a]/50">View unassigned cases waiting for investigator assignment.</p>
                 </div>
               </div>
 
@@ -3045,7 +3389,7 @@ function UserDashboardContent() {
                 </div>
               </div>
 
-              {/* All Cases Table */}
+              {/* Open Cases Table */}
               <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm overflow-hidden">
                 {openCasesLoading ? (
                   <div className="p-8 space-y-4">
@@ -3062,7 +3406,7 @@ function UserDashboardContent() {
                     <ShieldAlert className="h-12 w-12 text-[#0a0a0a]/20 mx-auto" />
                     <p className="text-base font-bold text-[#0a0a0a]/70">No cases available</p>
                     <p className="text-xs text-[#0a0a0a]/40 max-w-sm mx-auto">
-                      There are currently no cases available in the system.
+                      There are currently no open unassigned cases available in the system.
                     </p>
                   </div>
                 ) : (
@@ -3096,7 +3440,7 @@ function UserDashboardContent() {
                                 className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded bg-slate-800 hover:bg-[#CC2200] text-white text-xs font-bold transition-colors shadow-xs cursor-pointer"
                               >
                                 <Eye className="h-3.5 w-3.5" />
-                                View Case
+                                View / Claim Case
                               </button>
                             </td>
                           </tr>
@@ -3301,10 +3645,11 @@ function UserDashboardContent() {
                               >
                                 <Download className="h-3.5 w-3.5" />
                               </a>
-                              {!isInvestigator && (
+                              {canDeleteEvidenceItem(ev) && (
                                 <button
-                                  onClick={() => handleDeleteEvidence(ev.id)}
-                                  className="p-1.5 border border-rose-200 rounded text-rose-600 hover:bg-rose-50"
+                                  onClick={() => handleDeleteEvidence(ev)}
+                                  className="p-1.5 border border-rose-200 rounded text-rose-600 hover:bg-rose-50 cursor-pointer"
+                                  title="Delete Evidence"
                                 >
                                   <Trash2 className="h-3.5 w-3.5" />
                                 </button>
@@ -4194,6 +4539,67 @@ function UserDashboardContent() {
           </div>
         </div>
       )}
+      {/* ──────────────── DELETE EVIDENCE CONFIRMATION MODAL ──────────────── */}
+      {deleteEvidenceModalItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-white border border-[#e5e5e5] rounded-xl shadow-2xl max-w-md w-full p-6 animate-scale-up text-left space-y-4">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-10 h-10 rounded-full bg-rose-100 flex items-center justify-center flex-shrink-0">
+                <AlertTriangle className="h-5 w-5 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-[#0a0a0a]">Delete Evidence?</h3>
+                <p className="text-xs text-[#0a0a0a]/50">ID: EV-{deleteEvidenceModalItem.id}</p>
+              </div>
+            </div>
+
+            <div className="space-y-3 text-xs text-[#0a0a0a]/80">
+              <p>Are you sure you want to permanently delete:</p>
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                <p className="font-bold text-slate-900 truncate">
+                  &ldquo;{deleteEvidenceModalItem.original_name}&rdquo;
+                </p>
+              </div>
+              <p className="font-medium text-slate-700">
+                This evidence was uploaded by you.
+              </p>
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-800">
+                This action will remove the evidence file and its associated AI analysis.
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteEvidenceModalItem(null)}
+                disabled={isDeletingEvidence}
+                className="px-4 py-2 border border-[#e5e5e5] rounded-md text-xs font-semibold hover:bg-slate-100 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteEvidenceModal}
+                disabled={isDeletingEvidence}
+                className="px-5 py-2 bg-rose-600 text-white rounded-md text-xs font-bold shadow hover:bg-rose-700 disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+              >
+                {isDeletingEvidence ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete Evidence
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ──────────────── SUBMIT CASE CONFIRMATION MODAL ──────────────── */}
       {isSubmitConfirmModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
@@ -4703,15 +5109,90 @@ function UserDashboardContent() {
 
                       {/* Message Bubble */}
                       <div
-                        className={`max-w-[82%] rounded-2xl px-4 py-2.5 text-xs shadow-xs space-y-1 ${
+                        className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-xs shadow-xs space-y-1.5 ${
                           isMe
                             ? "bg-[#CC2200] text-white rounded-tr-xs"
                             : "bg-white text-[#0a0a0a] border border-[#e5e5e5] rounded-tl-xs"
                         }`}
                       >
-                        <p className="whitespace-pre-wrap break-words leading-relaxed font-normal">
-                          {msg.message}
-                        </p>
+                        {msg.message && (
+                          <p className="whitespace-pre-wrap break-words leading-relaxed font-normal">
+                            {msg.message}
+                          </p>
+                        )}
+
+                        {/* Attachments */}
+                        {msg.attachments && msg.attachments.length > 0 && (
+                          <div className="space-y-1.5 pt-1">
+                            {msg.attachments.map((att) => (
+                              <div
+                                key={att.id}
+                                className={`p-2 rounded-lg border text-left space-y-1 ${
+                                  isMe
+                                    ? "bg-red-950/40 border-red-300/30 text-white"
+                                    : "bg-slate-50 border-slate-200 text-slate-900"
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-1.5 truncate">
+                                    {att.mime_type.startsWith("image") ? (
+                                      <ImageIcon className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                                    ) : att.mime_type.startsWith("video") ? (
+                                      <Film className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                                    ) : (
+                                      <FileText className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                                    )}
+                                    <span className="font-semibold text-xs truncate max-w-[180px]" title={att.original_filename}>
+                                      {att.original_filename}
+                                    </span>
+                                  </div>
+                                  <span className={`text-[9px] font-mono shrink-0 ${isMe ? "text-red-200" : "text-slate-500"}`}>
+                                    {(att.file_size / (1024 * 1024)).toFixed(2)} MB
+                                  </span>
+                                </div>
+
+                                <div className={`text-[8px] font-mono truncate ${isMe ? "text-red-200/70" : "text-slate-400"}`}>
+                                  SHA-256: {att.sha256_hash.slice(0, 16)}...
+                                </div>
+
+                                <div className="flex items-center gap-1.5 pt-0.5">
+                                  <a
+                                    href={`${BACKEND_URL}${att.download_url}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold ${
+                                      isMe ? "bg-white/20 hover:bg-white/30 text-white" : "bg-slate-200 hover:bg-slate-300 text-slate-800"
+                                    }`}
+                                  >
+                                    <Eye className="h-2.5 w-2.5" />
+                                    View
+                                  </a>
+                                  <a
+                                    href={`${BACKEND_URL}${att.download_url}`}
+                                    download={att.original_filename}
+                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold ${
+                                      isMe ? "bg-white/20 hover:bg-white/30 text-white" : "bg-slate-200 hover:bg-slate-300 text-slate-800"
+                                    }`}
+                                  >
+                                    <Download className="h-2.5 w-2.5" />
+                                    Download
+                                  </a>
+                                  {isMe && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteChatAttachment(att.id)}
+                                      className="ml-auto text-rose-300 hover:text-white p-0.5 cursor-pointer"
+                                      title="Delete attachment"
+                                    >
+                                      <Trash2 className="h-2.5 w-2.5" />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
                         <div
                           className={`text-[9px] text-right font-semibold ${
                             isMe ? "text-white/80" : "text-[#0a0a0a]/40"
@@ -4727,11 +5208,51 @@ function UserDashboardContent() {
               <div ref={messagesEndRef} />
             </div>
 
+            {/* Pending Attachment Card */}
+            {chatAttachment && (
+              <div className="px-4 py-2 bg-slate-50 border-t border-[#e5e5e5] flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2 text-slate-800">
+                  <Paperclip className="h-4 w-4 text-[#CC2200]" />
+                  <span className="font-semibold truncate max-w-[200px]">{chatAttachment.name}</span>
+                  <span className="text-slate-500 font-mono text-[10px]">
+                    ({(chatAttachment.size / (1024 * 1024)).toFixed(2)} MB)
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setChatAttachment(null)}
+                  className="text-slate-400 hover:text-rose-600 cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+
             {/* Message Input Form */}
             <form onSubmit={handleSendMessage} className="p-3 bg-white border-t border-[#e5e5e5] flex gap-2 items-end shrink-0">
+              <input
+                type="file"
+                ref={chatFileInputRef}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) setChatAttachment(f);
+                  if (chatFileInputRef.current) chatFileInputRef.current.value = "";
+                }}
+                accept=".jpg,.jpeg,.png,.webp,.pdf,.mp4,.mov"
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => chatFileInputRef.current?.click()}
+                disabled={sendingMessage}
+                className="p-2.5 text-slate-500 hover:text-[#CC2200] hover:bg-slate-100 rounded-lg transition-colors cursor-pointer h-[42px] flex items-center justify-center shrink-0 border border-[#e5e5e5]"
+                title="Attach file"
+              >
+                <Paperclip className="h-4 w-4" />
+              </button>
               <textarea
                 rows={2}
-                placeholder="Type your message... (Shift + Enter for new line)"
+                placeholder={chatAttachment ? "Type a message with attachment..." : "Type your message... (Shift + Enter for new line)"}
                 value={newMessageText}
                 onChange={(e) => setNewMessageText(e.target.value)}
                 onKeyDown={(e) => {
@@ -4744,7 +5265,7 @@ function UserDashboardContent() {
               />
               <button
                 type="submit"
-                disabled={sendingMessage || !newMessageText.trim()}
+                disabled={sendingMessage || (!newMessageText.trim() && !chatAttachment)}
                 className="px-4 py-3 bg-[#CC2200] hover:bg-[#a81c00] disabled:opacity-50 text-white rounded-lg font-bold text-xs shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer h-[42px]"
                 title="Send Message"
               >

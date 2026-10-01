@@ -17,19 +17,25 @@ from app.database.database import SessionLocal
 from app.models.models import (
     InvestigationCase, EvidenceFile, MediaMetadata, AIModel, AIAnalysis,
     ForensicReview, InvestigationNote, InvestigatorNote, Report, Notification, AuditLog, CaseMessage,
-    ForensicScan, StatusEnum, FileTypeEnum, AIResultEnum, ReportTypeEnum, MediaTypeEnum
+    ForensicScan, StatusEnum, FileTypeEnum, AIResultEnum, ReportTypeEnum, MediaTypeEnum, MessageAttachment
 )
 from app.schemas.user import InvestigatorNoteCreate, InvestigatorNoteUpdate, InvestigatorNoteResponse
 from app.services.forensic_report import generate_forensic_pdf_report
 from app.services.sentinel_service import analyze_investigation_evidence
+from app.services.storage_service import (
+    storage_service, validate_attachment_file, verify_signed_token, generate_signed_token
+)
 from app.models.user import User
 from app.utils.auth import SECRET_KEY, ALGORITHM, get_password_hash
 
 router = APIRouter(prefix="/user", tags=["user"])
 
-# Ensure uploads directory exists inside current working directory
-UPLOAD_DIR = os.path.join(os.getcwd(), "uploads")
+# Base backend directory and uploads directory setup
+BASE_BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+UPLOAD_DIR = os.path.join(BASE_BACKEND_DIR, "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(os.path.join(UPLOAD_DIR, "analysis"), exist_ok=True)
+os.makedirs(os.path.join(UPLOAD_DIR, "reports"), exist_ok=True)
 
 def get_db():
     db = SessionLocal()
@@ -146,12 +152,14 @@ def get_user_stats(
         reports_count = db.query(Report).count()
         assigned_cases = open_cases
     elif is_investigator(user):
+        assigned_cond = or_(InvestigationCase.assigned_expert == user.id, InvestigationCase.assigned_investigator_id == user.id)
         available_cases = db.query(InvestigationCase).filter(
             InvestigationCase.status == StatusEnum.CASE_FILED,
-            InvestigationCase.assigned_expert == None
+            InvestigationCase.assigned_expert == None,
+            InvestigationCase.assigned_investigator_id == None
         ).count()
         assigned_cases = db.query(InvestigationCase).filter(
-            InvestigationCase.assigned_expert == user.id,
+            assigned_cond,
             InvestigationCase.status.in_([
                 StatusEnum.CASE_UNDER_INVESTIGATION,
                 StatusEnum.CASE_OPENED,
@@ -161,21 +169,21 @@ def get_user_stats(
                 StatusEnum.REVIEW
             ])
         ).count()
-        total_cases = db.query(InvestigationCase).filter(InvestigationCase.assigned_expert == user.id).count()
+        total_cases = db.query(InvestigationCase).filter(assigned_cond).count()
         open_cases = assigned_cases
         under_analysis = db.query(InvestigationCase).filter(
-            InvestigationCase.assigned_expert == user.id,
+            assigned_cond,
             InvestigationCase.status.in_([StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.UNDER_ANALYSIS])
         ).count()
         closed_cases = db.query(InvestigationCase).filter(
-            InvestigationCase.assigned_expert == user.id,
+            assigned_cond,
             InvestigationCase.status == StatusEnum.CLOSED
         ).count()
         evidence_uploaded = db.query(EvidenceFile).join(InvestigationCase).filter(
-            InvestigationCase.assigned_expert == user.id
+            assigned_cond
         ).count()
         ai_completed = db.query(AIAnalysis).join(EvidenceFile).join(InvestigationCase).filter(
-            InvestigationCase.assigned_expert == user.id
+            assigned_cond
         ).count()
         reports_count = db.query(Report).filter(Report.generated_by == user.id).count()
     else:
@@ -223,14 +231,15 @@ def get_user_recent(
         uploads = db.query(EvidenceFile).order_by(desc(EvidenceFile.upload_time)).limit(5).all()
         ai_results = db.query(AIAnalysis).order_by(desc(AIAnalysis.analyzed_at)).limit(5).all()
     elif is_investigator(user):
+        assigned_cond = or_(InvestigationCase.assigned_expert == user.id, InvestigationCase.assigned_investigator_id == user.id)
         cases = db.query(InvestigationCase).filter(
-            InvestigationCase.assigned_expert == user.id
+            assigned_cond
         ).order_by(desc(InvestigationCase.created_at)).limit(5).all()
         uploads = db.query(EvidenceFile).join(InvestigationCase).filter(
-            InvestigationCase.assigned_expert == user.id
+            assigned_cond
         ).order_by(desc(EvidenceFile.upload_time)).limit(5).all()
         ai_results = db.query(AIAnalysis).join(EvidenceFile).join(InvestigationCase).filter(
-            InvestigationCase.assigned_expert == user.id
+            assigned_cond
         ).order_by(desc(AIAnalysis.analyzed_at)).limit(5).all()
     else:
         cases = db.query(InvestigationCase).filter(
@@ -312,6 +321,30 @@ def get_user_recent(
     }
 
 # ─── 3. Cases Endpoints ───
+@router.get("/cases/assigned")
+def get_assigned_cases(
+    search: Optional[str] = None,
+    status_filter: Optional[str] = None,
+    sort_by: Optional[str] = "newest",
+    page: int = 1,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    return get_cases(search=search, status_filter=status_filter, scope="assigned", sort_by=sort_by, page=page, limit=limit, db=db, user=user)
+
+@router.get("/cases/all")
+def get_all_cases(
+    search: Optional[str] = None,
+    status_filter: Optional[str] = None,
+    sort_by: Optional[str] = "newest",
+    page: int = 1,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    return get_cases(search=search, status_filter=status_filter, scope="all", sort_by=sort_by, page=page, limit=limit, db=db, user=user)
+
 @router.get("/cases")
 def get_cases(
     search: Optional[str] = None,
@@ -323,23 +356,33 @@ def get_cases(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    if scope == "open_cases":
+    if scope in ["open_cases", "open"]:
         if not is_investigator_or_admin(user):
-            raise HTTPException(status_code=403, detail="Access denied: Only investigators can view all cases.")
-        query = db.query(InvestigationCase).filter(InvestigationCase.status == StatusEnum.CASE_FILED)
+            raise HTTPException(status_code=403, detail="Access denied: Only investigators can view open cases.")
+        query = db.query(InvestigationCase).filter(
+            InvestigationCase.status == StatusEnum.CASE_FILED,
+            InvestigationCase.assigned_expert == None,
+            InvestigationCase.assigned_investigator_id == None
+        )
+    elif scope in ["assigned", "assigned_cases"]:
+        assigned_cond = or_(InvestigationCase.assigned_expert == user.id, InvestigationCase.assigned_investigator_id == user.id)
+        query = db.query(InvestigationCase).filter(assigned_cond)
+    elif scope in ["all", "all_cases"]:
+        if is_investigator_or_admin(user):
+            query = db.query(InvestigationCase)
+        else:
+            query = db.query(InvestigationCase).filter(InvestigationCase.created_by == user.id)
     elif is_admin(user):
         query = db.query(InvestigationCase)
     elif is_investigator(user):
-        query = db.query(InvestigationCase).filter(
-            InvestigationCase.assigned_expert == user.id,
-            InvestigationCase.status.in_([StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.CASE_OPENED, StatusEnum.OPEN])
-        )
+        assigned_cond = or_(InvestigationCase.assigned_expert == user.id, InvestigationCase.assigned_investigator_id == user.id)
+        query = db.query(InvestigationCase).filter(assigned_cond)
     else:
         query = db.query(InvestigationCase).filter(InvestigationCase.created_by == user.id)
-    
+
     if search:
         search_term = f"%{search}%"
-        query = query.outerjoin(User, InvestigationCase.assigned_expert == User.id).filter(
+        query = query.outerjoin(User, or_(InvestigationCase.assigned_expert == User.id, InvestigationCase.assigned_investigator_id == User.id)).filter(
             or_(
                 InvestigationCase.case_number.like(search_term),
                 InvestigationCase.title.like(search_term),
@@ -347,37 +390,47 @@ def get_cases(
                 User.full_name.like(search_term)
             )
         )
-        
+
     if status_filter and status_filter.upper() != "ALL":
         sf = status_filter.upper().strip()
-        if sf == "PENDING":
-            query = query.filter(InvestigationCase.status.in_([StatusEnum.CASE_FILED, StatusEnum.DRAFT]))
-        elif sf == "ASSIGNED":
-            query = query.filter(InvestigationCase.status.in_([StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.CASE_OPENED, StatusEnum.OPEN]))
-        elif sf in ["UNDER INVESTIGATION", "UNDER_INVESTIGATION"]:
-            query = query.filter(InvestigationCase.status.in_([StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.UNDER_ANALYSIS, StatusEnum.EXPERT_REVIEW, StatusEnum.REVIEW]))
-        elif sf == "COMPLETED":
+        if sf in ["PENDING", "CASE_FILED", "UNASSIGNED"]:
+            query = query.filter(InvestigationCase.status == StatusEnum.CASE_FILED)
+        elif sf in ["ASSIGNED", "CASE_UNDER_INVESTIGATION", "UNDER_INVESTIGATION", "UNDER INVESTIGATION"]:
+            query = query.filter(InvestigationCase.status.in_([
+                StatusEnum.CASE_UNDER_INVESTIGATION,
+                StatusEnum.CASE_OPENED,
+                StatusEnum.UNDER_ANALYSIS,
+                StatusEnum.EXPERT_REVIEW,
+                StatusEnum.OPEN,
+                StatusEnum.REVIEW
+            ]))
+        elif sf in ["CLOSED", "COMPLETED"]:
             query = query.filter(InvestigationCase.status == StatusEnum.CLOSED)
+        elif sf == "DRAFT":
+            query = query.filter(InvestigationCase.status == StatusEnum.DRAFT)
         else:
             try:
                 query = query.filter(InvestigationCase.status == StatusEnum[sf])
             except Exception:
                 pass
-        
+
     if sort_by == "oldest":
         query = query.order_by(InvestigationCase.id)
     else:
         query = query.order_by(desc(InvestigationCase.created_at))
-        
+
     total = query.count()
     offset = (page - 1) * limit
     cases = query.offset(offset).limit(limit).all()
-    
+
     cases_list = []
     for c in cases:
         total_ev = len(c.evidence_files) if c.evidence_files else 0
         analyzed_ev = sum(1 for ef in (c.evidence_files or []) if ef.analyses)
         ai_prog = f"{analyzed_ev}/{total_ev} Scanned" if total_ev > 0 else "Pending AI"
+        exp_name = c.expert.full_name if c.expert else (c.assigned_investigator.full_name if c.assigned_investigator else None)
+        exp_id = c.assigned_expert or c.assigned_investigator_id
+
         cases_list.append({
             "id": c.id,
             "case_number": c.case_number,
@@ -390,14 +443,17 @@ def get_cases(
             "submitted_at": c.submitted_at.isoformat() if c.submitted_at else (c.created_at.isoformat() if c.created_at else None),
             "opened_at": c.opened_at.isoformat() if c.opened_at else None,
             "updated_at": c.updated_at.isoformat() if c.updated_at else (c.created_at.isoformat() if c.created_at else None),
-            "assigned_expert": c.expert.full_name if c.expert else None,
-            "assigned_expert_id": c.assigned_expert,
-            "assigned_expert_name": c.expert.full_name if c.expert else None,
+            "assigned_expert": exp_name,
+            "assigned_expert_id": exp_id,
+            "assigned_expert_name": exp_name,
+            "assigned_investigator_id": exp_id,
+            "assigned_investigator_name": exp_name,
+            "is_assigned_to_me": bool(exp_id == user.id),
             "created_by": c.created_by,
             "creator_name": c.creator.full_name if c.creator else "Anonymous Reporter",
             "evidence_count": total_ev
         })
-        
+
     return {
         "cases": cases_list,
         "total": total,
@@ -589,7 +645,7 @@ def open_case(
         raise HTTPException(status_code=404, detail="Case not found")
         
     # Prevent multi-investigator race conditions
-    if c.assigned_expert is not None:
+    if c.assigned_expert is not None or c.assigned_investigator_id is not None:
         raise HTTPException(
             status_code=409,
             detail="This case has already been assigned to another investigator."
@@ -602,14 +658,16 @@ def open_case(
         )
         
     # Enforce Investigator Limit: Max 3 simultaneous active investigations
+    assigned_cond = or_(InvestigationCase.assigned_expert == user.id, InvestigationCase.assigned_investigator_id == user.id)
     active_cases_count = db.query(InvestigationCase).filter(
-        InvestigationCase.assigned_expert == user.id,
+        assigned_cond,
         InvestigationCase.status.in_([
             StatusEnum.CASE_OPENED,
             StatusEnum.UNDER_ANALYSIS,
             StatusEnum.EXPERT_REVIEW,
             StatusEnum.OPEN,
-            StatusEnum.REVIEW
+            StatusEnum.REVIEW,
+            StatusEnum.CASE_UNDER_INVESTIGATION
         ])
     ).count()
     
@@ -622,6 +680,7 @@ def open_case(
     c.status = StatusEnum.CASE_UNDER_INVESTIGATION
     c.opened_at = datetime.now(timezone.utc)
     c.assigned_expert = user.id
+    c.assigned_investigator_id = user.id
     db.commit()
     
     log_audit_event(db, c.id, user.id, "Case Assigned to Investigator", f"Investigation accepted and assigned to investigator {user.full_name}.")
@@ -650,14 +709,14 @@ def unassign_case(
     if not c:
         raise HTTPException(status_code=404, detail="Case not found")
         
-    if not is_admin(user) and c.assigned_expert != user.id:
+    if not is_admin(user) and c.assigned_expert != user.id and c.assigned_investigator_id != user.id:
         raise HTTPException(status_code=403, detail="You are not authorized to unassign this case.")
         
-    if c.assigned_expert is None:
+    if c.assigned_expert is None and c.assigned_investigator_id is None:
         raise HTTPException(status_code=400, detail="This case is not currently assigned.")
         
-    old_expert_id = c.assigned_expert
     c.assigned_expert = None
+    c.assigned_investigator_id = None
     c.status = StatusEnum.CASE_FILED
     db.commit()
     
@@ -684,11 +743,13 @@ def get_case_detail(
     if not c:
         raise HTTPException(status_code=404, detail="Case not found")
         
+    is_assigned = (c.assigned_expert == user.id or c.assigned_investigator_id == user.id)
+
     # Strictly enforce case access permission based on user role and assignment
     if is_admin(user):
         pass
     elif is_investigator(user):
-        if c.assigned_expert != user.id:
+        if not is_assigned and c.status != StatusEnum.CASE_FILED:
             raise HTTPException(
                 status_code=403,
                 detail="You are not assigned to this case. Claim the case first to access the workspace."
@@ -701,8 +762,8 @@ def get_case_detail(
     evidence_list = []
     
     has_evidence_access = True
-    if is_investigator(user) and not is_admin(user) and c.assigned_expert != user.id:
-        has_evidence_access = False
+    if is_investigator(user) and not is_admin(user) and not is_assigned and c.status == StatusEnum.CASE_FILED:
+        has_evidence_access = True
         
     if has_evidence_access:
         for e in c.evidence_files:
@@ -731,6 +792,26 @@ def get_case_detail(
                     "analyzed_at": a.analyzed_at.isoformat() if a.analyzed_at else None
                 })
                 
+            uploader_user = db.query(User).filter(User.id == e.uploaded_by).first() if e.uploaded_by else None
+            uploader_name = uploader_user.full_name if uploader_user else "Case Owner"
+            uploader_role = "User"
+            if e.uploaded_by_role:
+                if e.uploaded_by_role.upper() == "INVESTIGATOR":
+                    uploader_role = "Investigator"
+                elif e.uploaded_by_role.upper() == "ADMIN":
+                    uploader_role = "Admin"
+                elif e.uploaded_by_role.upper() == "USER":
+                    uploader_role = "Case Owner" if (uploader_user and uploader_user.id == c.created_by) else "User"
+            elif uploader_user:
+                if is_admin(uploader_user):
+                    uploader_role = "Admin"
+                elif is_investigator(uploader_user):
+                    uploader_role = "Investigator"
+                elif uploader_user.id == c.created_by:
+                    uploader_role = "Case Owner"
+                else:
+                    uploader_role = "User"
+
             evidence_list.append({
                 "id": e.id,
                 "file_name": e.file_name,
@@ -740,6 +821,10 @@ def get_case_detail(
                 "file_size": e.file_size,
                 "sha256_hash": e.sha256_hash,
                 "upload_time": e.upload_time.isoformat() if e.upload_time else None,
+                "uploaded_by": e.uploaded_by,
+                "uploaded_by_id": e.uploaded_by,
+                "uploaded_by_name": uploader_name,
+                "uploader_role": uploader_role,
                 "metadata": meta_info,
                 "analyses": analyses_list
             })
@@ -802,9 +887,12 @@ def get_case_detail(
         "created_at": c.created_at.isoformat() if c.created_at else None,
         "submitted_at": c.submitted_at.isoformat() if c.submitted_at else None,
         "opened_at": c.opened_at.isoformat() if c.opened_at else None,
-        "assigned_expert": c.expert.full_name if c.expert else None,
-        "assigned_expert_id": c.assigned_expert,
-        "assigned_expert_name": c.expert.full_name if c.expert else None,
+        "assigned_expert": c.expert.full_name if c.expert else (c.assigned_investigator.full_name if c.assigned_investigator else None),
+        "assigned_expert_id": c.assigned_expert or c.assigned_investigator_id,
+        "assigned_expert_name": c.expert.full_name if c.expert else (c.assigned_investigator.full_name if c.assigned_investigator else None),
+        "assigned_investigator_id": c.assigned_expert or c.assigned_investigator_id,
+        "assigned_investigator_name": c.expert.full_name if c.expert else (c.assigned_investigator.full_name if c.assigned_investigator else None),
+        "is_assigned_to_me": bool((c.assigned_expert and c.assigned_expert == user.id) or (c.assigned_investigator_id and c.assigned_investigator_id == user.id)),
         "created_by": c.created_by,
         "creator_name": c.creator.full_name if c.creator else None,
         "evidence": evidence_list,
@@ -1019,19 +1107,14 @@ async def upload_evidence(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    if is_investigator_or_admin(user):
-        c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
-    else:
-        c = db.query(InvestigationCase).filter(
-            InvestigationCase.id == case_id,
-            InvestigationCase.created_by == user.id
-        ).first()
-        
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
     if not c:
-        raise HTTPException(status_code=404, detail="Case not found or access denied")
+        raise HTTPException(status_code=404, detail="Case not found")
         
-    if not is_investigator_or_admin(user) and c.status != StatusEnum.DRAFT:
-        raise HTTPException(status_code=403, detail="Case is submitted and locked. Evidence cannot be uploaded.")
+    verify_evidence_upload_access(c, user)
+        
+    if c.status == StatusEnum.CLOSED or (hasattr(c.status, "value") and c.status.value == "CLOSED"):
+        raise HTTPException(status_code=403, detail="Case is closed. Additional evidence cannot be uploaded.")
         
     original_name = file.filename
     content = await file.read()
@@ -1055,9 +1138,16 @@ async def upload_evidence(
     elif mime.startswith("audio/"):
         f_type = FileTypeEnum.AUDIO
         
+    uploader_role = "USER"
+    if is_admin(user):
+        uploader_role = "ADMIN"
+    elif is_investigator(user):
+        uploader_role = "INVESTIGATOR"
+
     new_evidence = EvidenceFile(
         case_id=case_id,
         uploaded_by=user.id,
+        uploaded_by_role=uploader_role,
         file_name=stored_name,
         original_name=original_name,
         file_type=f_type,
@@ -1101,7 +1191,7 @@ async def upload_evidence(
     db.add(metadata)
     db.commit()
     
-    log_audit_event(db, c.id, user.id, "Evidence Uploaded", f"Evidence file '{original_name}' uploaded.")
+    log_audit_event(db, c.id, user.id, "Evidence Uploaded", f"Evidence file '{original_name}' uploaded by {user.full_name} ({uploader_role}).")
     add_user_notification(
         db, user.id, "Evidence Upload Completed",
         f"File '{original_name}' has been successfully uploaded to case {c.case_number}."
@@ -1112,7 +1202,9 @@ async def upload_evidence(
         "evidence": {
             "id": new_evidence.id,
             "original_name": new_evidence.original_name,
-            "file_size": new_evidence.file_size
+            "file_size": new_evidence.file_size,
+            "uploaded_by": new_evidence.uploaded_by,
+            "uploaded_by_role": new_evidence.uploaded_by_role
         }
     }
 
@@ -1150,6 +1242,24 @@ def get_user_evidence(
         if len(e.analyses) > 0:
             status_text = e.analyses[0].result.value
             
+        uploader_user = db.query(User).filter(User.id == e.uploaded_by).first() if e.uploaded_by else None
+        uploader_name = uploader_user.full_name if uploader_user else "Case Owner"
+        uploader_role = "User"
+        if e.uploaded_by_role:
+            if e.uploaded_by_role.upper() == "INVESTIGATOR":
+                uploader_role = "Investigator"
+            elif e.uploaded_by_role.upper() == "ADMIN":
+                uploader_role = "Admin"
+            else:
+                uploader_role = "User"
+        elif uploader_user:
+            if is_admin(uploader_user):
+                uploader_role = "Admin"
+            elif is_investigator(uploader_user):
+                uploader_role = "Investigator"
+            else:
+                uploader_role = "User"
+
         evidence_list.append({
             "id": e.id,
             "original_name": e.original_name,
@@ -1158,6 +1268,10 @@ def get_user_evidence(
             "upload_time": e.upload_time.isoformat() if e.upload_time else None,
             "case_number": e.case.case_number if e.case else "N/A",
             "case_title": e.case.title if e.case else "N/A",
+            "uploaded_by": e.uploaded_by,
+            "uploaded_by_id": e.uploaded_by,
+            "uploaded_by_name": uploader_name,
+            "uploader_role": uploader_role,
             "status": status_text
         })
         
@@ -1174,8 +1288,10 @@ def check_evidence_access(e: EvidenceFile, user: User) -> bool:
     if is_investigator(user):
         if e.case and e.case.assigned_expert == user.id:
             return True
+        if e.uploaded_by == user.id:
+            return True
         return False
-    if e.uploaded_by == user.id:
+    if e.uploaded_by == user.id or (e.case and e.case.created_by == user.id):
         return True
     return False
 
@@ -1209,43 +1325,158 @@ def delete_evidence(
     if not e:
         raise HTTPException(status_code=404, detail="Evidence not found")
         
+    c = e.case
     if not is_admin(user):
         if is_investigator(user):
-            raise HTTPException(status_code=403, detail="Investigators are not allowed to delete evidence.")
-        if e.uploaded_by != user.id:
-            raise HTTPException(status_code=403, detail="Access denied")
-        if e.case and e.case.status != StatusEnum.DRAFT:
-            raise HTTPException(status_code=403, detail="Case is submitted and locked. Evidence cannot be deleted.")
+            # 1. Investigator must have access to the case
+            if not c:
+                raise HTTPException(status_code=404, detail="Investigation case not found")
+            if c.assigned_expert != user.id and c.assigned_investigator_id != user.id:
+                raise HTTPException(status_code=403, detail="Forbidden: You are not assigned to this case.")
+            if c.status == StatusEnum.CLOSED or (hasattr(c.status, "value") and c.status.value == "CLOSED"):
+                raise HTTPException(status_code=403, detail="Forbidden: Case is closed. Evidence cannot be deleted.")
+            # 2. Strict ownership rule: Investigator can ONLY delete evidence THEY uploaded
+            if e.uploaded_by != user.id:
+                raise HTTPException(status_code=403, detail="Forbidden: Investigators are only permitted to delete evidence they uploaded.")
+        else:
+            # Regular user / Case owner
+            if e.uploaded_by != user.id:
+                raise HTTPException(status_code=403, detail="Forbidden: Access denied.")
+            if c and c.status != StatusEnum.DRAFT:
+                raise HTTPException(status_code=403, detail="Forbidden: Case is submitted and locked. Evidence cannot be deleted.")
             
     case_id = e.case_id
     orig_name = e.original_name
 
+    # 1. Delete associated media metadata
     if e.metadata_info:
         db.delete(e.metadata_info)
         
+    # 2. Delete AI analyses and their physical artifact files (masks, heatmaps, overlays)
     analyses = db.query(AIAnalysis).filter(AIAnalysis.evidence_id == e.id).all()
     for a in analyses:
+        artifact_paths = [a.mask_path, a.overlay_path, a.report_path]
+        for art_path in artifact_paths:
+            if art_path:
+                rel = art_path.lstrip("/")
+                candidates = [
+                    os.path.join(BASE_BACKEND_DIR, rel),
+                    os.path.join(UPLOAD_DIR, "analysis", os.path.basename(rel)),
+                    os.path.join(UPLOAD_DIR, os.path.basename(rel))
+                ]
+                for cand in candidates:
+                    if os.path.exists(cand) and os.path.isfile(cand):
+                        try:
+                            os.remove(cand)
+                        except Exception as del_art_err:
+                            print(f"Warning: Failed to delete artifact file {cand}: {del_art_err}")
+
         db.query(ForensicReview).filter(ForensicReview.analysis_id == a.id).delete()
         db.delete(a)
 
-    if e.storage_path and os.path.exists(e.storage_path):
+    # 3. Clean up any leftover artifacts in uploads/analysis matching this evidence
+    try:
+        analysis_dir = os.path.join(UPLOAD_DIR, "analysis")
+        if os.path.exists(analysis_dir):
+            prefix = f"case_{case_id}_ev_{e.id}_"
+            for fname in os.listdir(analysis_dir):
+                if fname.startswith(prefix):
+                    full_p = os.path.join(analysis_dir, fname)
+                    if os.path.isfile(full_p):
+                        try:
+                            os.remove(full_p)
+                        except Exception as p_err:
+                            print(f"Failed to remove analysis file {full_p}: {p_err}")
+    except Exception as dir_err:
+        print("Analysis directory cleanup note:", dir_err)
+
+    # 4. Delete the physical evidence file from storage
+    if e.storage_path and os.path.exists(e.storage_path) and os.path.isfile(e.storage_path):
         try:
             os.remove(e.storage_path)
         except Exception as err:
-            print("Failed to remove file from disk:", err)
-            
+            print("Failed to remove evidence file from disk:", err)
+
+    # 5. Delete evidence database record
     db.delete(e)
+
+    # 6. Clean up ForensicScan results and invalidate cached PDF report so future reports exclude deleted evidence
+    if case_id:
+        scans = db.query(ForensicScan).filter(ForensicScan.case_id == case_id).all()
+        for sc in scans:
+            try:
+                if sc.results_json:
+                    r_list = json.loads(sc.results_json)
+                    new_r_list = [item for item in r_list if item.get("evidence_id") != evidence_id]
+                    sc.results_json = json.dumps(new_r_list)
+                    sc.evidence_count = len(new_r_list)
+                if sc.pdf_path:
+                    pdf_rel = sc.pdf_path.lstrip("/")
+                    pdf_candidates = [
+                        os.path.join(BASE_BACKEND_DIR, pdf_rel),
+                        os.path.join(UPLOAD_DIR, "reports", os.path.basename(pdf_rel)),
+                        os.path.join(UPLOAD_DIR, os.path.basename(pdf_rel))
+                    ]
+                    for pdf_cand in pdf_candidates:
+                        if os.path.exists(pdf_cand) and os.path.isfile(pdf_cand):
+                            try:
+                                os.remove(pdf_cand)
+                            except Exception as pdf_del_err:
+                                print(f"Warning: Failed to delete cached PDF {pdf_cand}: {pdf_del_err}")
+                    sc.pdf_path = None
+            except Exception as sc_err:
+                print("Forensic scan cleanup note:", sc_err)
+
+        reports = db.query(Report).filter(Report.case_id == case_id).all()
+        for rep in reports:
+            if rep.report_file:
+                rep_rel = rep.report_file.lstrip("/")
+                rep_cand = os.path.join(BASE_BACKEND_DIR, rep_rel)
+                if not os.path.exists(rep_cand):
+                    rep_cand = os.path.join(UPLOAD_DIR, "reports", os.path.basename(rep_rel))
+                if os.path.exists(rep_cand) and os.path.isfile(rep_cand):
+                    try:
+                        os.remove(rep_cand)
+                    except Exception:
+                        pass
+            db.delete(rep)
+
     db.commit()
     
+    # 7. Audit log (Part 15)
     if case_id:
-        log_audit_event(db, case_id, user.id, "Evidence Deleted (before submission)", f"Evidence file '{orig_name}' was deleted.")
+        actor_role_str = "Investigator" if is_investigator(user) else ("Admin" if is_admin(user) else "User")
+        actor_id_str = f"INV-{user.id:03d}" if is_investigator(user) else (f"ADM-{user.id:03d}" if is_admin(user) else f"USR-{user.id:03d}")
+        try:
+            from app.services.audit_service import log_audit_event as log_full_audit
+            log_full_audit(
+                db=db,
+                action="Evidence Deleted",
+                module="Evidence",
+                severity="INFO",
+                status="SUCCESS",
+                actor_id=actor_id_str,
+                actor_role=actor_role_str,
+                target_type="Evidence",
+                target_id=f"EV-{evidence_id:05d}",
+                description=f"Evidence file '{orig_name}' (ID: EV-{evidence_id:05d}) was permanently deleted by {user.full_name} ({actor_role_str}).",
+                user_id=user.id,
+                case_id=case_id
+            )
+        except Exception as audit_err:
+            print("Audit log note:", audit_err)
+            log_audit_event(db, case_id, user.id, "Evidence Deleted", f"Evidence file '{orig_name}' was deleted by {user.full_name}.")
         
     add_user_notification(
         db, user.id, "Evidence Deleted",
-        f"Evidence file '{orig_name}' was deleted from storage."
+        f"Evidence file '{orig_name}' was permanently deleted from case."
     )
     
-    return {"message": "Evidence file deleted successfully"}
+    return {
+        "message": "Evidence deleted successfully",
+        "evidence_id": evidence_id,
+        "case_id": case_id
+    }
 
 # ─── 7. AI Analysis Endpoints ───
 @router.get("/ai-models")
@@ -1667,7 +1898,8 @@ def mark_notification_read(
     return {"message": "Notification marked as read"}
 
 class MessageCreate(BaseModel):
-    message: str
+    message: Optional[str] = ""
+    attachment_ids: Optional[List[int]] = None
 
 def format_datetime_utc(dt: Optional[datetime]) -> Optional[str]:
     if not dt:
@@ -1723,6 +1955,31 @@ def get_case_messages(
         is_inv = (m.sender_id == c.assigned_expert)
         role_label = "Lead Investigator" if is_inv else "Case Owner"
         
+        # Serialize attachments for this message
+        msg_attachments = []
+        for att in m.attachments:
+            signed_url = storage_service.generate_signed_download_url(
+                att.storage_key, c.id, att.id, expires_in=900
+            )
+            msg_attachments.append({
+                "id": att.id,
+                "message_id": att.message_id,
+                "case_id": att.case_id,
+                "uploaded_by": att.uploaded_by,
+                "uploaded_by_name": att.uploader.full_name if att.uploader else "Unknown",
+                "uploaded_by_role": att.uploaded_by_role,
+                "original_filename": att.original_filename,
+                "mime_type": att.mime_type,
+                "file_size": att.file_size,
+                "sha256_hash": att.sha256_hash,
+                "status": att.status,
+                "scan_status": att.scan_status,
+                "evidence_id": att.evidence_id,
+                "is_evidence": att.evidence_id is not None,
+                "created_at": format_datetime_utc(att.created_at),
+                "download_url": signed_url
+            })
+
         msg_list.append({
             "id": m.id,
             "case_id": m.case_id,
@@ -1731,6 +1988,7 @@ def get_case_messages(
             "sender_role": role_label,
             "is_me": m.sender_id == user.id,
             "message": m.message,
+            "attachments": msg_attachments,
             "created_at": format_datetime_utc(m.created_at),
             "read_at": format_datetime_utc(m.read_at)
         })
@@ -1751,8 +2009,9 @@ def send_case_message(
     user: User = Depends(get_current_user)
 ):
     msg_text = payload.message.strip() if payload.message else ""
-    if not msg_text:
-        raise HTTPException(status_code=400, detail="Message content cannot be empty")
+    att_ids = payload.attachment_ids or []
+    if not msg_text and not att_ids:
+        raise HTTPException(status_code=400, detail="Message content or attachment is required.")
 
     c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
     if not c:
@@ -1782,10 +2041,25 @@ def send_case_message(
     db.commit()
     db.refresh(new_msg)
 
+    # Link referenced attachments
+    linked_attachments = []
+    if att_ids:
+        for aid in att_ids:
+            att = db.query(MessageAttachment).filter(
+                MessageAttachment.id == aid,
+                MessageAttachment.case_id == c.id
+            ).first()
+            if att and (att.uploaded_by == user.id or is_admin(user)):
+                att.message_id = new_msg.id
+                linked_attachments.append(att)
+        db.commit()
+
     # Notify recipient
     recipient_id = c.assigned_expert if user.id == c.created_by else c.created_by
     if recipient_id and recipient_id != user.id:
         snippet = msg_text if len(msg_text) <= 50 else msg_text[:50] + "..."
+        if not snippet and linked_attachments:
+            snippet = f"Sent attachment: {linked_attachments[0].original_filename}"
         add_user_notification(
             db,
             recipient_id,
@@ -1799,11 +2073,35 @@ def send_case_message(
         c.id,
         user.id,
         "Message Sent",
-        f"Message sent by {user.full_name} for case {c.case_number}."
+        f"Message sent by {user.full_name} for case {c.case_number} (with {len(linked_attachments)} attachments)."
     )
 
     is_inv = (user.id == c.assigned_expert)
     role_label = "Lead Investigator" if is_inv else "Case Owner"
+
+    att_list = []
+    for att in linked_attachments:
+        signed_url = storage_service.generate_signed_download_url(
+            att.storage_key, c.id, att.id, expires_in=900
+        )
+        att_list.append({
+            "id": att.id,
+            "message_id": att.message_id,
+            "case_id": att.case_id,
+            "uploaded_by": att.uploaded_by,
+            "uploaded_by_name": user.full_name,
+            "uploaded_by_role": att.uploaded_by_role,
+            "original_filename": att.original_filename,
+            "mime_type": att.mime_type,
+            "file_size": att.file_size,
+            "sha256_hash": att.sha256_hash,
+            "status": att.status,
+            "scan_status": att.scan_status,
+            "evidence_id": att.evidence_id,
+            "is_evidence": att.evidence_id is not None,
+            "created_at": format_datetime_utc(att.created_at),
+            "download_url": signed_url
+        })
 
     return {
         "id": new_msg.id,
@@ -1813,8 +2111,372 @@ def send_case_message(
         "sender_role": role_label,
         "is_me": True,
         "message": new_msg.message,
+        "attachments": att_list,
         "created_at": format_datetime_utc(new_msg.created_at),
         "read_at": None
+    }
+
+# ─── Secure File Attachment Endpoints ────────────────────────────────────────
+
+@router.post("/cases/{case_id}/attachments/upload")
+async def upload_case_attachment(
+    case_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    # Strict access check: must be Admin, case creator, or assigned investigator
+    if not is_admin(user) and user.id != c.created_by and user.id != c.assigned_expert:
+        raise HTTPException(
+            status_code=403,
+            detail="Access Denied: You are not authorized to upload attachments to this case."
+        )
+
+    file_bytes = await file.read()
+    ext, canonical_mime, file_size, sha256_hash = validate_attachment_file(
+        file.filename or "attachment.dat", file.content_type, file_bytes
+    )
+
+    clean_filename = os.path.basename(file.filename or "attachment.dat").replace(" ", "_")
+    storage_key = f"cases/{c.id}/attachments/{uuid.uuid4().hex[:12]}_{clean_filename}"
+
+    # Save to private object storage
+    storage_service.put_object(storage_key, file_bytes, content_type=canonical_mime)
+
+    # Determine uploader role label
+    uploader_role = "INVESTIGATOR" if (user.role == "INVESTIGATOR" or user.id == c.assigned_expert) else ("ADMIN" if is_admin(user) else "USER")
+
+    # Create MessageAttachment record
+    attachment = MessageAttachment(
+        case_id=c.id,
+        uploaded_by=user.id,
+        uploaded_by_role=uploader_role,
+        original_filename=file.filename or clean_filename,
+        mime_type=canonical_mime,
+        file_size=file_size,
+        storage_key=storage_key,
+        sha256_hash=sha256_hash,
+        status="CLEAN",
+        scan_status="CLEAN"
+    )
+    db.add(attachment)
+    db.commit()
+    db.refresh(attachment)
+
+    # Generate short-lived signed download URL
+    signed_download_url = storage_service.generate_signed_download_url(
+        storage_key, c.id, attachment.id, expires_in=900
+    )
+
+    return {
+        "id": attachment.id,
+        "case_id": attachment.case_id,
+        "message_id": attachment.message_id,
+        "uploaded_by": attachment.uploaded_by,
+        "uploaded_by_name": user.full_name,
+        "uploaded_by_role": attachment.uploaded_by_role,
+        "original_filename": attachment.original_filename,
+        "mime_type": attachment.mime_type,
+        "file_size": attachment.file_size,
+        "sha256_hash": attachment.sha256_hash,
+        "status": attachment.status,
+        "scan_status": attachment.scan_status,
+        "created_at": format_datetime_utc(attachment.created_at),
+        "download_url": signed_download_url
+    }
+
+@router.get("/cases/{case_id}/attachments/{attachment_id}")
+@router.get("/cases/{case_id}/messages/{message_id}/attachments/{attachment_id}")
+def get_case_attachment(
+    case_id: int,
+    attachment_id: int,
+    message_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    if not is_admin(user) and user.id != c.created_by and user.id != c.assigned_expert:
+        raise HTTPException(status_code=403, detail="Access Denied: You do not have access to this case.")
+
+    att = db.query(MessageAttachment).filter(
+        MessageAttachment.id == attachment_id,
+        MessageAttachment.case_id == case_id
+    ).first()
+    if not att:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    if message_id is not None and att.message_id != message_id:
+        raise HTTPException(status_code=400, detail="Attachment does not belong to the specified message.")
+
+    if att.scan_status == "REJECTED":
+        raise HTTPException(status_code=403, detail="File is quarantined or failed safety inspection.")
+
+    signed_download_url = storage_service.generate_signed_download_url(
+        att.storage_key, c.id, att.id, expires_in=900
+    )
+
+    return {
+        "id": att.id,
+        "case_id": att.case_id,
+        "message_id": att.message_id,
+        "uploaded_by": att.uploaded_by,
+        "uploaded_by_name": att.uploader.full_name if att.uploader else "Unknown",
+        "uploaded_by_role": att.uploaded_by_role,
+        "original_filename": att.original_filename,
+        "mime_type": att.mime_type,
+        "file_size": att.file_size,
+        "sha256_hash": att.sha256_hash,
+        "status": att.status,
+        "scan_status": att.scan_status,
+        "evidence_id": att.evidence_id,
+        "is_evidence": att.evidence_id is not None,
+        "created_at": format_datetime_utc(att.created_at),
+        "download_url": signed_download_url
+    }
+
+@router.get("/cases/{case_id}/attachments/{attachment_id}/download")
+def download_case_attachment(
+    case_id: int,
+    attachment_id: int,
+    expires: Optional[int] = Query(None),
+    signature: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+    token: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    att = db.query(MessageAttachment).filter(
+        MessageAttachment.id == attachment_id,
+        MessageAttachment.case_id == case_id
+    ).first()
+    if not att:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    if att.scan_status == "REJECTED":
+        raise HTTPException(status_code=403, detail="Access Forbidden: File rejected by security scanner.")
+
+    # Validate access: either valid signed token OR authenticated session
+    has_valid_signature = False
+    if expires and signature:
+        if verify_signed_token(att.storage_key, expires, signature):
+            has_valid_signature = True
+
+    if not has_valid_signature:
+        user = get_current_user(authorization=authorization, token=token, db=db)
+        c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+        if not c or (not is_admin(user) and user.id != c.created_by and user.id != c.assigned_expert):
+            raise HTTPException(status_code=403, detail="Access Denied: You are not authorized to download this attachment.")
+
+    local_path = storage_service.get_local_path(att.storage_key)
+    if not local_path or not os.path.exists(local_path):
+        raise HTTPException(status_code=404, detail="Attachment file not found in storage.")
+
+    headers = {
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'",
+        "Cache-Control": "private, max-age=3600"
+    }
+    return FileResponse(
+        local_path,
+        media_type=att.mime_type,
+        filename=att.original_filename,
+        headers=headers
+    )
+
+@router.delete("/cases/{case_id}/attachments/{attachment_id}")
+def delete_case_attachment(
+    case_id: int,
+    attachment_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    att = db.query(MessageAttachment).filter(
+        MessageAttachment.id == attachment_id,
+        MessageAttachment.case_id == case_id
+    ).first()
+    if not att:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    # Authorization rules:
+    # Admin: allowed
+    # Investigator: must be assigned AND must be the uploader
+    # User: must be creator AND must be the uploader
+    if is_admin(user):
+        pass
+    elif user.role == "INVESTIGATOR" or user.id == c.assigned_expert:
+        if c.assigned_expert != user.id:
+            raise HTTPException(status_code=403, detail="Forbidden: You are not assigned to this case.")
+        if att.uploaded_by != user.id:
+            raise HTTPException(status_code=403, detail="Forbidden: Investigators are only permitted to delete attachments they uploaded.")
+    elif user.id == c.created_by:
+        if att.uploaded_by != user.id:
+            raise HTTPException(status_code=403, detail="Forbidden: You can only delete attachments you uploaded.")
+    else:
+        raise HTTPException(status_code=403, detail="Access Denied: You are not authorized to delete attachments in this case.")
+
+    # If attachment was promoted to formal evidence, handle evidence cleanup
+    if att.evidence_id:
+        ev = db.query(EvidenceFile).filter(EvidenceFile.id == att.evidence_id).first()
+        if ev:
+            # Delete AI analyses, metadata, and reviews
+            db.query(AIAnalysis).filter(AIAnalysis.evidence_id == ev.id).delete()
+            db.query(MediaMetadata).filter(MediaMetadata.evidence_id == ev.id).delete()
+            db.query(ForensicReview).filter(ForensicReview.evidence_id == ev.id).delete()
+            # Invalidate forensic scans and cached reports
+            scans = db.query(ForensicScan).filter(ForensicScan.case_id == c.id).all()
+            for s in scans:
+                if s.pdf_path and os.path.exists(s.pdf_path):
+                    try:
+                        os.remove(s.pdf_path)
+                    except OSError:
+                        pass
+                s.pdf_path = None
+            db.delete(ev)
+
+    # Delete physical object from storage
+    storage_service.delete_object(att.storage_key)
+
+    # Delete attachment record
+    db.delete(att)
+    db.commit()
+
+    # Log audit event
+    log_audit_event(
+        db,
+        c.id,
+        user.id,
+        "Attachment Deleted",
+        f"Attachment '{att.original_filename}' (ID: {att.id}) deleted by {user.full_name}."
+    )
+
+    return {
+        "message": "Attachment deleted successfully",
+        "attachment_id": attachment_id,
+        "case_id": case_id
+    }
+
+@router.post("/cases/{case_id}/attachments/{attachment_id}/promote-to-evidence")
+def promote_attachment_to_evidence(
+    case_id: int,
+    attachment_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    # Controlled action: Lead Investigator or Admin
+    if not is_admin(user) and user.id != c.assigned_expert:
+        raise HTTPException(
+            status_code=403,
+            detail="Access Denied: Only the assigned lead investigator or admin can promote attachments to formal evidence."
+        )
+
+    att = db.query(MessageAttachment).filter(
+        MessageAttachment.id == attachment_id,
+        MessageAttachment.case_id == case_id
+    ).first()
+    if not att:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    if att.scan_status == "REJECTED":
+        raise HTTPException(status_code=400, detail="Cannot promote rejected or unsafe attachment to evidence.")
+
+    # Check if already promoted
+    if att.evidence_id:
+        existing_ev = db.query(EvidenceFile).filter(EvidenceFile.id == att.evidence_id).first()
+        if existing_ev:
+            return {
+                "message": "Attachment already promoted to formal evidence",
+                "evidence_id": existing_ev.id,
+                "evidence": {
+                    "id": existing_ev.id,
+                    "case_id": existing_ev.case_id,
+                    "original_name": existing_ev.original_name,
+                    "sha256_hash": existing_ev.sha256_hash,
+                    "uploaded_by_role": existing_ev.uploaded_by_role
+                }
+            }
+
+    local_path = storage_service.get_local_path(att.storage_key)
+    if not local_path or not os.path.exists(local_path):
+        raise HTTPException(status_code=404, detail="Attachment physical file missing in storage.")
+
+    # Determine FileTypeEnum
+    if att.mime_type.startswith("image"):
+        ft = FileTypeEnum.IMAGE
+    elif att.mime_type.startswith("video"):
+        ft = FileTypeEnum.VIDEO
+    elif att.mime_type.startswith("audio"):
+        ft = FileTypeEnum.AUDIO
+    else:
+        ft = FileTypeEnum.DOCUMENT
+
+    # Create EvidenceFile preserving all provenance metadata
+    new_ev = EvidenceFile(
+        case_id=c.id,
+        uploaded_by=att.uploaded_by,
+        uploaded_by_role=att.uploaded_by_role,
+        file_name=os.path.basename(att.storage_key),
+        original_name=att.original_filename,
+        file_type=ft,
+        mime_type=att.mime_type,
+        file_size=att.file_size,
+        storage_path=local_path,
+        sha256_hash=att.sha256_hash,
+        upload_time=att.created_at
+    )
+    db.add(new_ev)
+    db.commit()
+    db.refresh(new_ev)
+
+    # Link to attachment
+    att.evidence_id = new_ev.id
+    att.status = "PROMOTED_TO_EVIDENCE"
+    db.commit()
+
+    # Invalidate cached PDF reports so newly promoted evidence will be included
+    scans = db.query(ForensicScan).filter(ForensicScan.case_id == c.id).all()
+    for s in scans:
+        if s.pdf_path and os.path.exists(s.pdf_path):
+            try:
+                os.remove(s.pdf_path)
+            except OSError:
+                pass
+        s.pdf_path = None
+    db.commit()
+
+    # Log audit event
+    log_audit_event(
+        db,
+        c.id,
+        user.id,
+        "Attachment Promoted to Evidence",
+        f"Attachment '{att.original_filename}' (ID: {att.id}, SHA-256: {att.sha256_hash[:16]}...) promoted to formal evidence EV-{new_ev.id:05d} by {user.full_name}."
+    )
+
+    return {
+        "message": "Attachment promoted to formal evidence successfully",
+        "evidence_id": new_ev.id,
+        "evidence": {
+            "id": new_ev.id,
+            "case_id": new_ev.case_id,
+            "original_name": new_ev.original_name,
+            "sha256_hash": new_ev.sha256_hash,
+            "uploaded_by_role": new_ev.uploaded_by_role,
+            "upload_time": format_datetime_utc(new_ev.upload_time)
+        }
     }
 
 def verify_case_access(c: InvestigationCase, user: User):
@@ -1825,6 +2487,20 @@ def verify_case_access(c: InvestigationCase, user: User):
     if is_investigator(user) and c.assigned_expert == user.id:
         return True
     raise HTTPException(status_code=403, detail="Forbidden: You are not assigned to this case.")
+
+def verify_evidence_upload_access(c: InvestigationCase, user: User):
+    if is_admin(user):
+        return True
+    if c.created_by == user.id:
+        return True
+    if is_investigator(user):
+        if c.assigned_expert == user.id:
+            return True
+        elif c.assigned_expert is None:
+            raise HTTPException(status_code=403, detail="Forbidden: You must claim this case before uploading evidence.")
+        else:
+            raise HTTPException(status_code=403, detail="Forbidden: This case is assigned to another investigator.")
+    raise HTTPException(status_code=403, detail="Forbidden: You are not authorized to upload evidence to this case.")
 
 # ─── 9. AI Forensic Scan & Report Endpoints ───
 
@@ -1861,21 +2537,20 @@ def analyze_investigation_endpoint(
 
 
 @router.get("/analysis/artifacts/{filename}")
+@router.get("/uploads/analysis/{filename}")
 def get_analysis_artifact(
     filename: str,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user)
+    db: Session = Depends(get_db)
 ):
     clean_filename = os.path.basename(filename)
     candidates = [
         os.path.join(UPLOAD_DIR, "analysis", clean_filename),
-        os.path.join(os.getcwd(), "uploads", "analysis", clean_filename),
-        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "uploads", "analysis", clean_filename)
+        os.path.join(BASE_BACKEND_DIR, "uploads", "analysis", clean_filename)
     ]
     for p in candidates:
         if os.path.exists(p):
-            return FileResponse(p)
-    raise HTTPException(status_code=404, detail="Analysis artifact not found")
+            return FileResponse(p, media_type="image/png")
+    raise HTTPException(status_code=404, detail="Analysis artifact image not found on disk")
 
 
 @router.post("/cases/{case_id}/scan")
@@ -1904,7 +2579,7 @@ def trigger_forensic_scan(
     try:
         scan_time_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         pdf_filename = f"Forensic_Report_{c.case_number}_{scan_time_str}.pdf"
-        pdf_dir = os.path.join(os.getcwd(), "uploads", "reports")
+        pdf_dir = os.path.join(UPLOAD_DIR, "reports")
         pdf_path = os.path.join(pdf_dir, pdf_filename)
 
         creator_user = db.query(User).filter(User.id == c.created_by).first()
@@ -1992,28 +2667,48 @@ def download_forensic_pdf_report(
     pdf_file_exists = False
     if scan and scan.pdf_path:
         relative_path = scan.pdf_path.lstrip("/")
-        abs_path = os.path.join(os.getcwd(), relative_path)
+        abs_path = os.path.join(BASE_BACKEND_DIR, relative_path)
+        if not os.path.exists(abs_path):
+            abs_path = os.path.join(UPLOAD_DIR, "reports", os.path.basename(relative_path))
         if os.path.exists(abs_path):
             pdf_file_exists = True
 
-    if not pdf_file_exists:
-        # Run real Sentinel AI V1.7-A dual-head analysis pipeline
-        ai_res = analyze_investigation_evidence(c, evidence_files, db, user)
-        scan_id = ai_res.get("scan_id")
-        scan = db.query(ForensicScan).filter(ForensicScan.id == scan_id).first() if scan_id else None
+    current_ev_ids = {ef.id for ef in evidence_files}
+    scan_ev_ids = set()
+    scan_results = []
+    if scan and scan.results_json:
+        try:
+            scan_results = json.loads(scan.results_json)
+            scan_ev_ids = {r.get("evidence_id") for r in scan_results if r.get("evidence_id")}
+        except Exception:
+            pass
 
-        scan_time_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    # If cached PDF is missing or active evidence has changed (added/deleted), regenerate PDF report
+    if not pdf_file_exists or (scan_ev_ids and scan_ev_ids != current_ev_ids) or not scan:
+        missing_analyses = any(ef.id not in scan_ev_ids for ef in evidence_files)
+        if missing_analyses or not scan or not scan_results:
+            ai_res = analyze_investigation_evidence(c, evidence_files, db, user)
+            scan_id = ai_res.get("scan_id")
+            scan = db.query(ForensicScan).filter(ForensicScan.id == scan_id).first() if scan_id else None
+            scan_results = ai_res.get("results", [])
+            scan_duration = ai_res.get("scan_duration", 0.0)
+        else:
+            scan_duration = scan.scan_duration or 0.0
+
+        scan_time_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         pdf_filename = f"Forensic_Report_{c.case_number}_{scan_time_str}.pdf"
-        pdf_dir = os.path.join(os.getcwd(), "uploads", "reports")
+        pdf_dir = os.path.join(UPLOAD_DIR, "reports")
         abs_path = os.path.join(pdf_dir, pdf_filename)
 
         creator_user = db.query(User).filter(User.id == c.created_by).first()
         investigator_user = db.query(User).filter(User.id == c.assigned_expert).first() if c.assigned_expert else None
+        if not investigator_user and c.assigned_investigator_id:
+            investigator_user = db.query(User).filter(User.id == c.assigned_investigator_id).first()
 
         scan_meta = {
-            "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-            "scan_duration": ai_res.get("scan_duration", 0.0),
-            "results": ai_res.get("results", [])
+            "created_at": scan.created_at.strftime("%Y-%m-%d %H:%M UTC") if (scan and scan.created_at) else datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            "scan_duration": scan_duration,
+            "results": [r for r in scan_results if r.get("evidence_id") in current_ev_ids]
         }
 
         generate_forensic_pdf_report(c, creator_user, investigator_user, evidence_files, scan_meta, abs_path)

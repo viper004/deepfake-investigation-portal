@@ -62,7 +62,16 @@ def analyze_investigation_evidence(
     total_start_time = time.perf_counter()
 
     for idx, ef in enumerate(evidence_files, 1):
-        if not ef.storage_path or not os.path.exists(ef.storage_path):
+        file_path = ef.storage_path
+        if file_path and not os.path.exists(file_path):
+            alt1 = os.path.abspath(os.path.join(base_backend_dir, file_path.lstrip("/")))
+            alt2 = os.path.abspath(os.path.join(base_backend_dir, "uploads", os.path.basename(file_path)))
+            if os.path.exists(alt1):
+                file_path = alt1
+            elif os.path.exists(alt2):
+                file_path = alt2
+
+        if not file_path or not os.path.exists(file_path):
             results.append({
                 "evidence_id": ef.id,
                 "file_name": ef.file_name,
@@ -74,12 +83,12 @@ def analyze_investigation_evidence(
 
         try:
             # 1. Run real Sentinel AI inference
-            inf_res = engine.analyze_image(ef.storage_path)
+            inf_res = engine.analyze_image(file_path)
 
             # 2. Generate forensic localization artifacts
             base_name = f"case_{case.id}_ev_{ef.id}_{int(time.time())}"
             artifacts = create_localization_artifacts(
-                original_image_input=ef.storage_path,
+                original_image_input=file_path,
                 localization_mask=inf_res["localization_mask"],
                 output_dir=output_analysis_dir,
                 base_name=base_name,
