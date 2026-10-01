@@ -1,7 +1,7 @@
 import os
 import json
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage, HRFlowable, KeepTogether, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -170,28 +170,33 @@ def generate_forensic_pdf_report(case, creator_user, investigator_user, evidence
         except Exception:
             pass
 
-    # 1. CASE & INVESTIGATION METADATA TABLE
-    story.append(Paragraph("1. INVESTIGATION METADATA", section_heading))
+    # 1. INVESTIGATION INFORMATION (Part 14)
+    story.append(Paragraph("1. INVESTIGATION INFORMATION", section_heading))
     
-    created_str = case.created_at.strftime("%Y-%m-%d %H:%M UTC") if case.created_at else "N/A"
-    incident_str = case.incident_date.strftime("%Y-%m-%d") if case.incident_date else "N/A"
-    scan_date_str = scan_record.get("created_at") or datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    created_str = case.created_at.strftime("%d %B %Y, %H:%M UTC") if case.created_at else "N/A"
+    incident_str = case.incident_date.strftime("%d %B %Y") if case.incident_date else "N/A"
+    now_utc = datetime.now(timezone.utc)
+    report_gen_date = now_utc.strftime("%d %B %Y, %H:%M UTC")
+    scan_date_str = scan_record.get("created_at") or report_gen_date
     
-    creator_name = creator_user.full_name if creator_user else "N/A"
-    investigator_name = investigator_user.full_name if investigator_user else "Assigned Forensic Analyst"
-    status_val = case.status.value if hasattr(case.status, "value") else str(case.status)
+    creator_name = creator_user.full_name if creator_user else "Case User"
+    creator_id_str = f"USR-{creator_user.id:03d}" if creator_user else "N/A"
+    inv_name = investigator_user.full_name if investigator_user else "Assigned Forensic Analyst"
+    inv_id_str = f"INV-{investigator_user.id:03d}" if investigator_user else "N/A"
+    status_raw = case.status.value if hasattr(case.status, "value") else str(case.status)
+    status_display = status_raw.replace("CASE_", "").replace("_", " ").title()
 
     case_info_data = [
-        [Paragraph("<b>Investigation ID:</b>", body_regular), Paragraph(f"<b>{case.case_number}</b>", body_regular),
-         Paragraph("<b>Case Status:</b>", body_regular), Paragraph(f"<b>{status_val}</b>", body_regular)],
+        [Paragraph("<b>Case ID:</b>", body_regular), Paragraph(f"<b>{case.case_number}</b>", body_regular),
+         Paragraph("<b>Case Status:</b>", body_regular), Paragraph(f"<b>{status_display}</b>", body_regular)],
         [Paragraph("<b>Case Title:</b>", body_regular), Paragraph(case.title or "N/A", body_regular),
-         Paragraph("<b>Evidence Items:</b>", body_regular), Paragraph(str(len(evidence_files)), body_regular)],
-        [Paragraph("<b>Investigator / Owner:</b>", body_regular), Paragraph(creator_name, body_regular),
-         Paragraph("<b>Assigned Expert:</b>", body_regular), Paragraph(investigator_name, body_regular)],
+         Paragraph("<b>Report Generated:</b>", body_regular), Paragraph(report_gen_date, body_regular)],
+        [Paragraph("<b>Investigator:</b>", body_regular), Paragraph(f"<b>{inv_name}</b>", body_regular),
+         Paragraph("<b>Investigator ID:</b>", body_regular), Paragraph(f"<b>{inv_id_str}</b>", body_regular)],
+        [Paragraph("<b>Case Submitter:</b>", body_regular), Paragraph(creator_name, body_regular),
+         Paragraph("<b>Submitter ID:</b>", body_regular), Paragraph(creator_id_str, body_regular)],
         [Paragraph("<b>Incident Date:</b>", body_regular), Paragraph(incident_str, body_regular),
-         Paragraph("<b>Analysis Date:</b>", body_regular), Paragraph(scan_date_str, body_regular)],
-        [Paragraph("<b>Created Date:</b>", body_regular), Paragraph(created_str, body_regular),
-         Paragraph("<b>Model Version:</b>", body_regular), Paragraph("Sentinel AI V1.7-A Dual-Head", body_regular)],
+         Paragraph("<b>Analysis Engine:</b>", body_regular), Paragraph("Sentinel AI V1.7-A Dual-Head", body_regular)],
     ]
 
     info_table = Table(case_info_data, colWidths=[110, 150, 110, 153])
@@ -207,66 +212,157 @@ def generate_forensic_pdf_report(case, creator_user, investigator_user, evidence
     story.append(info_table)
     story.append(Spacer(1, 14))
 
-    # 2. EXECUTIVE SUMMARY
-    story.append(Paragraph("2. EXECUTIVE SUMMARY", section_heading))
+    # 2. EVIDENCE SUMMARY (Part 10 - Dynamic counts from actual case data)
+    story.append(Paragraph("2. EVIDENCE SUMMARY", section_heading))
     
-    total_ev = len(results)
-    tampered_count = sum(1 for r in results if r.get("classification") == "tampered" or r.get("assessment_code") == "DEEPFAKE" or r.get("deepfake_probability", 0) >= 50 or r.get("tampered_probability", 0) >= 0.40)
-    authentic_count = total_ev - tampered_count
-    loc_available_count = sum(1 for r in results if r.get("localization_available") or r.get("overlay_artifact_path") or r.get("overlay_path"))
+    total_evidence_count = len(evidence_files)
+    user_uploaded_count = 0
+    investigator_uploaded_count = 0
 
-    exec_summary_data = [
-        [Paragraph("<b>Total Evidence Analyzed</b>", body_bold), Paragraph("<b>Tampered Classifications</b>", body_bold), Paragraph("<b>Authentic Classifications</b>", body_bold), Paragraph("<b>Localization Maps</b>", body_bold)],
-        [Paragraph(f"<font size=12 color='#0F172A'><b>{total_ev}</b></font>", body_regular),
-         Paragraph(f"<font size=12 color='#DC2626'><b>{tampered_count}</b></font>", body_regular),
-         Paragraph(f"<font size=12 color='#166534'><b>{authentic_count}</b></font>", body_regular),
-         Paragraph(f"<font size=12 color='#2563EB'><b>{loc_available_count} / {total_ev}</b></font>", body_regular)]
+    for ef in evidence_files:
+        is_inv = False
+        if ef.uploaded_by_role and ef.uploaded_by_role.upper() == "INVESTIGATOR":
+            is_inv = True
+        elif getattr(ef, "uploader", None):
+            u = ef.uploader
+            if getattr(u, "role_id", None) == 2 or (getattr(u, "role", None) and u.role.role_name == "INVESTIGATOR"):
+                is_inv = True
+        elif investigator_user and ef.uploaded_by == investigator_user.id:
+            is_inv = True
+            
+        if is_inv:
+            investigator_uploaded_count += 1
+        else:
+            user_uploaded_count += 1
+
+    active_ev_ids = {ef.id for ef in evidence_files}
+    active_results = [r for r in results if r.get("evidence_id") in active_ev_ids]
+    if not active_results and results:
+        active_results = results[:total_evidence_count]
+
+    ai_scanned_count = len([r for r in active_results if r.get("status") != "failed"])
+    tampered_count = sum(1 for r in active_results if (
+        r.get("classification") == "tampered" or
+        r.get("assessment_code") == "DEEPFAKE" or
+        r.get("tampered_probability", 0) >= 0.40 or
+        r.get("deepfake_probability", 0) >= 50
+    ))
+    authentic_count = max(0, ai_scanned_count - tampered_count)
+
+    ev_summary_table_data = [
+        [Paragraph("<b>Category</b>", body_bold), Paragraph("<b>Count</b>", body_bold),
+         Paragraph("<b>AI Forensic Classification</b>", body_bold), Paragraph("<b>Count</b>", body_bold)],
+        [Paragraph("<b>Total Evidence:</b>", body_regular), Paragraph(f"<b>{total_evidence_count}</b>", body_regular),
+         Paragraph("<b>AI Scanned:</b>", body_regular), Paragraph(f"<b>{ai_scanned_count}</b>", body_regular)],
+        [Paragraph("<b>User Uploaded:</b>", body_regular), Paragraph(f"{user_uploaded_count}", body_regular),
+         Paragraph("<b>Authentic:</b>", body_regular), Paragraph(f"<font color='#166534'><b>{authentic_count}</b></font>", body_regular)],
+        [Paragraph("<b>Investigator Uploaded:</b>", body_regular), Paragraph(f"{investigator_uploaded_count}", body_regular),
+         Paragraph("<b>Tampered:</b>", body_regular), Paragraph(f"<font color='#DC2626'><b>{tampered_count}</b></font>", body_regular)],
     ]
 
-    exec_table = Table(exec_summary_data, colWidths=[130, 130, 130, 133])
-    exec_table.setStyle(TableStyle([
+    summary_table = Table(ev_summary_table_data, colWidths=[140, 120, 150, 113])
+    summary_table.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#F1F5F9')),
-        ('BACKGROUND', (0,1), (-1,1), colors.HexColor('#FFFFFF')),
+        ('BACKGROUND', (0,1), (-1,-1), colors.HexColor('#FFFFFF')),
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#CBD5E1')),
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('TOPPADDING', (0,0), (-1,-1), 6),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+        ('TOPPADDING', (0,0), (-1,-1), 5),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+        ('LEFTPADDING', (0,0), (-1,-1), 6),
+        ('RIGHTPADDING', (0,0), (-1,-1), 6),
     ]))
-    story.append(exec_table)
+    story.append(summary_table)
     story.append(Spacer(1, 14))
 
-    # Page Break before Evidence Examination section for clean pagination
+    # Page Break before Evidence Examination section for clean forensic layout
     story.append(PageBreak())
 
-    # 3. DETAILED EVIDENCE ANALYSIS
+    # 3. DETAILED EVIDENCE EXAMINATION & METADATA (Parts 9, 11, 12, 13)
     story.append(Paragraph("3. DETAILED EVIDENCE EXAMINATION", section_heading))
 
-    for idx, res in enumerate(results, 1):
+    for idx, ef in enumerate(evidence_files, 1):
         item_story = []
-        file_name = res.get("file_name") or res.get("original_name") or f"Evidence #{idx}"
-        item_story.append(Paragraph(f"EVIDENCE ITEM E-00{idx}: {file_name}", body_bold))
+        ev_label = f"EV-{ef.id:05d}"
+        item_story.append(Paragraph(f"EVIDENCE ITEM {idx} ({ev_label}) — {ef.original_name}", body_bold))
         
-        ev_obj = next((ef for ef in evidence_files if ef.id == res.get("evidence_id")), None) if res.get("evidence_id") else None
-        
-        file_size_bytes = res.get("file_size", 0) or (ev_obj.file_size if ev_obj else 0)
-        file_size_kb = f"{(file_size_bytes / 1024):.2f} KB" if file_size_bytes else "N/A"
-        sha_hash = res.get("sha256_hash") or (ev_obj.sha256_hash if ev_obj else "N/A")
+        # Match analysis result
+        res = next((r for r in results if r.get("evidence_id") == ef.id), None)
+        if not res:
+            res = next((r for r in results if r.get("file_name") == ef.file_name or r.get("original_name") == ef.original_name), None)
 
-        if ev_obj and getattr(ev_obj, "created_at", None):
-            upload_ts_str = ev_obj.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+        # Determine uploader metadata
+        is_inv_uploader = False
+        if ef.uploaded_by_role and ef.uploaded_by_role.upper() == "INVESTIGATOR":
+            is_inv_uploader = True
+        elif getattr(ef, "uploader", None) and (getattr(ef.uploader, "role_id", None) == 2 or (getattr(ef.uploader, "role", None) and ef.uploader.role.role_name == "INVESTIGATOR")):
+            is_inv_uploader = True
+        elif investigator_user and ef.uploaded_by == investigator_user.id:
+            is_inv_uploader = True
+
+        if is_inv_uploader:
+            uploader_role_display = "Investigator"
+            uploader_name_display = ef.uploader.full_name if getattr(ef, "uploader", None) else (investigator_user.full_name if investigator_user else "Investigator")
+        elif ef.uploaded_by_role and ef.uploaded_by_role.upper() == "ADMIN":
+            uploader_role_display = "Admin"
+            uploader_name_display = ef.uploader.full_name if getattr(ef, "uploader", None) else "Administrator"
         else:
-            upload_ts_str = res.get("upload_timestamp") or scan_date_str
+            uploader_role_display = "User"
+            uploader_name_display = ef.uploader.full_name if getattr(ef, "uploader", None) else (creator_user.full_name if creator_user else "Case User")
 
-        analysis_ts_str = res.get("analyzed_at") or scan_date_str
+        file_size_bytes = ef.file_size or (res.get("file_size", 0) if res else 0)
+        file_size_kb = f"{(file_size_bytes / 1024):.2f} KB" if file_size_bytes else "N/A"
+        sha_hash = ef.sha256_hash or (res.get("sha256_hash") if res else "N/A")
+
+        upload_ts = ef.upload_time or getattr(ef, "created_at", None)
+        upload_ts_str = upload_ts.strftime("%d %B %Y, %H:%M UTC") if upload_ts else "N/A"
+
+        if res and res.get("status") != "failed":
+            scan_status_str = "Completed"
+            is_tampered = (
+                res.get("classification") == "tampered" or
+                res.get("assessment_code") == "DEEPFAKE" or
+                res.get("tampered_probability", 0) >= 0.40 or
+                res.get("deepfake_probability", 0) >= 50
+            )
+            prediction_str = "TAMPERED" if is_tampered else "AUTHENTIC"
+            
+            if res.get("tampered_probability") is not None:
+                conf_val = (res["tampered_probability"] if is_tampered else (1.0 - res["tampered_probability"])) * 100
+            elif res.get("manipulation_confidence") is not None:
+                conf_val = float(res["manipulation_confidence"])
+            elif res.get("confidence_score") is not None:
+                c_val = float(res["confidence_score"])
+                conf_val = c_val * 100 if c_val <= 1.0 else c_val
+            else:
+                conf_val = float(res.get("deepfake_probability", 0)) if is_tampered else (100.0 - float(res.get("deepfake_probability", 0)))
+            confidence_str = f"{conf_val:.2f}%"
+            model_version_str = res.get("model_version") or "Sentinel AI V1.7-A"
+            scanned_ts_str = res.get("analyzed_at") or scan_date_str
+        else:
+            scan_status_str = "Failed" if (res and res.get("status") == "failed") else "Pending"
+            prediction_str = "UNVERIFIED"
+            confidence_str = "N/A"
+            model_version_str = "Sentinel AI V1.7-A"
+            scanned_ts_str = "N/A"
+            is_tampered = False
+
+        pred_color = "#DC2626" if prediction_str == "TAMPERED" else ("#166534" if prediction_str == "AUTHENTIC" else "#64748B")
 
         meta_data = [
-            [Paragraph("<b>Evidence ID:</b>", body_regular), Paragraph(str(res.get("evidence_id") or idx), body_regular),
-             Paragraph("<b>MIME Type:</b>", body_regular), Paragraph(str(res.get("mime_type", "image/jpeg")), body_regular)],
+            [Paragraph("<b>Evidence ID:</b>", body_regular), Paragraph(f"<b>{ev_label}</b>", body_regular),
+             Paragraph("<b>AI Scan:</b>", body_regular), Paragraph(f"<b>{scan_status_str}</b>", body_regular)],
+            [Paragraph("<b>Original Filename:</b>", body_regular), Paragraph(ef.original_name, body_regular),
+             Paragraph("<b>Prediction:</b>", body_regular), Paragraph(f"<font color='{pred_color}'><b>{prediction_str}</b></font>", body_regular)],
+            [Paragraph("<b>Uploaded By:</b>", body_regular), Paragraph(f"<b>{uploader_name_display}</b>", body_regular),
+             Paragraph("<b>Confidence:</b>", body_regular), Paragraph(f"<b>{confidence_str}</b>", body_regular)],
+            [Paragraph("<b>Uploader Role:</b>", body_regular), Paragraph(f"<b>{uploader_role_display}</b>", body_regular),
+             Paragraph("<b>Model:</b>", body_regular), Paragraph(model_version_str, body_regular)],
+            [Paragraph("<b>Uploaded At:</b>", body_regular), Paragraph(upload_ts_str, body_regular),
+             Paragraph("<b>Scanned At:</b>", body_regular), Paragraph(scanned_ts_str, body_regular)],
             [Paragraph("<b>File Size:</b>", body_regular), Paragraph(file_size_kb, body_regular),
-             Paragraph("<b>Upload Timestamp:</b>", body_regular), Paragraph(upload_ts_str, body_regular)],
-            [Paragraph("<b>Analysis Timestamp:</b>", body_regular), Paragraph(analysis_ts_str, body_regular),
-             Paragraph("<b>SHA-256 Hash:</b>", body_regular), Paragraph(f"<font size=6.5 fontName=Courier>{sha_hash}</font>", body_regular)]
+             Paragraph("<b>MIME Type:</b>", body_regular), Paragraph(str(ef.mime_type or "image/jpeg"), body_regular)],
+            [Paragraph("<b>SHA-256 Hash:</b>", body_regular), Paragraph(f"<font size=6.5 fontName=Courier>{sha_hash}</font>", body_regular),
+             Paragraph("", body_regular), Paragraph("", body_regular)],
         ]
         
         meta_table = Table(meta_data, colWidths=[100, 160, 100, 163])
@@ -283,16 +379,19 @@ def generate_forensic_pdf_report(case, creator_user, investigator_user, evidence
         item_story.append(Spacer(1, 6))
 
         # Images Grid (Original + Localization Heatmap Overlay)
-        storage_path = res.get("storage_path")
-        if not storage_path and res.get("evidence_id"):
-            ev_obj = next((ef for ef in evidence_files if ef.id == res.get("evidence_id")), None)
-            if ev_obj:
-                storage_path = ev_obj.storage_path
+        storage_path = ef.storage_path
+        if storage_path and not os.path.exists(storage_path):
+            alt1 = os.path.join(base_backend_dir, storage_path.lstrip("/"))
+            alt2 = os.path.join(base_backend_dir, "uploads", os.path.basename(storage_path))
+            if os.path.exists(alt1):
+                storage_path = alt1
+            elif os.path.exists(alt2):
+                storage_path = alt2
 
         if storage_path and os.path.exists(storage_path):
             try:
                 orig_img = get_aspect_image(storage_path, max_width=250, max_height=150)
-                overlay_path = res.get("overlay_artifact_path") or res.get("overlay_path")
+                overlay_path = res.get("overlay_artifact_path") or res.get("overlay_path") if res else None
                 
                 if overlay_path:
                     abs_overlay = os.path.join(base_backend_dir, overlay_path.lstrip('/'))
@@ -323,46 +422,45 @@ def generate_forensic_pdf_report(case, creator_user, investigator_user, evidence
                 print(f"Warning: Failed to load image in PDF generation: {img_err}")
 
         # Analysis Result Metrics Table
-        is_tampered = res.get("classification") == "tampered" or res.get("assessment_code") == "DEEPFAKE" or res.get("tampered_probability", 0) >= 0.40 or res.get("deepfake_probability", 0) >= 50
-        
-        tampered_prob_val = res.get("tampered_probability")
-        if tampered_prob_val is not None:
-            tampered_pct_str = f"{(tampered_prob_val * 100):.1f}%"
-            authentic_pct_str = f"{((1.0 - tampered_prob_val) * 100):.1f}%"
-        else:
-            tampered_pct_str = f"{res.get('deepfake_probability', 0):.1f}%"
-            authentic_pct_str = f"{100 - res.get('deepfake_probability', 0):.1f}%"
+        if res and res.get("status") != "failed":
+            tampered_prob_val = res.get("tampered_probability")
+            if tampered_prob_val is not None:
+                tampered_pct_str = f"{(tampered_prob_val * 100):.2f}%"
+                authentic_pct_str = f"{((1.0 - tampered_prob_val) * 100):.2f}%"
+            else:
+                tampered_pct_str = f"{res.get('deepfake_probability', 0):.2f}%"
+                authentic_pct_str = f"{100 - res.get('deepfake_probability', 0):.2f}%"
 
-        result_bg = colors.HexColor('#FEF2F2') if is_tampered else colors.HexColor('#F0FDF4')
-        result_text_color = colors.HexColor('#991B1B') if is_tampered else colors.HexColor('#166534')
-        assessment_label = "TAMPERED / MANIPULATED MEDIA" if is_tampered else "AUTHENTIC MEDIA"
+            result_bg = colors.HexColor('#FEF2F2') if is_tampered else colors.HexColor('#F0FDF4')
+            result_text_color = colors.HexColor('#991B1B') if is_tampered else colors.HexColor('#166534')
+            assessment_label = "TAMPERED / MANIPULATED MEDIA" if is_tampered else "AUTHENTIC MEDIA"
 
-        analysis_table_data = [
-            [Paragraph("<b>Metric</b>", body_bold), Paragraph("<b>Sentinel AI V1.7-A Value</b>", body_bold), Paragraph("<b>Threshold Criteria</b>", body_bold)],
-            [Paragraph("Classification Result", body_regular), 
-             Paragraph(f"<font color='{result_text_color.hexval()}'><b>{assessment_label}</b></font>", body_regular),
-             Paragraph("Threshold: 0.40", body_regular)],
-            [Paragraph("Tampered Probability", body_regular), Paragraph(f"<b>{tampered_pct_str}</b>", body_regular), Paragraph("Range: [0.0% - 100.0%]", body_regular)],
-            [Paragraph("Authentic Probability", body_regular), Paragraph(f"<b>{authentic_pct_str}</b>", body_regular), Paragraph("Range: [0.0% - 100.0%]", body_regular)],
-            [Paragraph("Spatial Localization", body_regular), 
-             Paragraph("Heatmap Artifact Generated" if res.get("overlay_artifact_path") or res.get("overlay_path") else "No Anomaly Detected", body_regular),
-             Paragraph("Threshold: 0.35", body_regular)]
-        ]
+            analysis_table_data = [
+                [Paragraph("<b>Metric</b>", body_bold), Paragraph("<b>Sentinel AI V1.7-A Value</b>", body_bold), Paragraph("<b>Threshold Criteria</b>", body_bold)],
+                [Paragraph("Classification Result", body_regular), 
+                 Paragraph(f"<font color='{result_text_color.hexval()}'><b>{assessment_label}</b></font>", body_regular),
+                 Paragraph("Threshold: 0.40", body_regular)],
+                [Paragraph("Tampered Probability", body_regular), Paragraph(f"<b>{tampered_pct_str}</b>", body_regular), Paragraph("Range: [0.0% - 100.0%]", body_regular)],
+                [Paragraph("Authentic Probability", body_regular), Paragraph(f"<b>{authentic_pct_str}</b>", body_regular), Paragraph("Range: [0.0% - 100.0%]", body_regular)],
+                [Paragraph("Spatial Localization", body_regular), 
+                 Paragraph("Heatmap Artifact Generated" if res.get("overlay_artifact_path") or res.get("overlay_path") else "No Anomaly Detected", body_regular),
+                 Paragraph("Threshold: 0.35", body_regular)]
+            ]
 
-        analysis_table = Table(analysis_table_data, colWidths=[140, 243, 140])
-        analysis_table.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#F1F5F9')),
-            ('BACKGROUND', (1,1), (1,1), result_bg),
-            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#CBD5E1')),
-            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-            ('TOPPADDING', (0,0), (-1,-1), 4),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-            ('LEFTPADDING', (0,0), (-1,-1), 6),
-            ('RIGHTPADDING', (0,0), (-1,-1), 6),
-        ]))
+            analysis_table = Table(analysis_table_data, colWidths=[140, 243, 140])
+            analysis_table.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#F1F5F9')),
+                ('BACKGROUND', (1,1), (1,1), result_bg),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#CBD5E1')),
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('TOPPADDING', (0,0), (-1,-1), 4),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+                ('LEFTPADDING', (0,0), (-1,-1), 6),
+                ('RIGHTPADDING', (0,0), (-1,-1), 6),
+            ]))
 
-        item_story.append(analysis_table)
-        item_story.append(Spacer(1, 12))
+            item_story.append(analysis_table)
+            item_story.append(Spacer(1, 12))
 
         story.append(KeepTogether(item_story))
 

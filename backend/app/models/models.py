@@ -62,6 +62,7 @@ class InvestigationCase(Base):
     description = Column(Text)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     assigned_expert = Column(Integer, ForeignKey("users.id"))
+    assigned_investigator_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     status = Column(Enum(StatusEnum), default=StatusEnum.DRAFT)
     incident_date = Column(DateTime(timezone=True))
     submitted_at = Column(DateTime(timezone=True), nullable=True)
@@ -71,11 +72,13 @@ class InvestigationCase(Base):
 
     creator = relationship("User", foreign_keys=[created_by], back_populates="investigation_cases")
     expert = relationship("User", foreign_keys=[assigned_expert], back_populates="assigned_cases")
+    assigned_investigator = relationship("User", foreign_keys=[assigned_investigator_id])
     evidence_files = relationship("EvidenceFile", back_populates="case", cascade="all, delete-orphan")
     notes = relationship("InvestigationNote", back_populates="case", cascade="all, delete-orphan")
     reports = relationship("Report", back_populates="case", cascade="all, delete-orphan")
     audit_logs = relationship("AuditLog", back_populates="case", cascade="all, delete-orphan")
     messages = relationship("CaseMessage", back_populates="case", cascade="all, delete-orphan")
+    attachments = relationship("MessageAttachment", back_populates="case", cascade="all, delete-orphan")
 
 
 class EvidenceFile(Base):
@@ -90,6 +93,7 @@ class EvidenceFile(Base):
     file_size = Column(Integer)
     storage_path = Column(String(500), nullable=False)
     sha256_hash = Column(String(64), nullable=False)
+    uploaded_by_role = Column(String(50), nullable=True)
     upload_time = Column(DateTime(timezone=True), server_default=func.now())
 
     case = relationship("InvestigationCase", back_populates="evidence_files")
@@ -239,6 +243,31 @@ class CaseMessage(Base):
 
     case = relationship("InvestigationCase", back_populates="messages")
     sender = relationship("User")
+    attachments = relationship("MessageAttachment", back_populates="message", cascade="all, delete-orphan")
+
+
+class MessageAttachment(Base):
+    __tablename__ = "message_attachments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    message_id = Column(Integer, ForeignKey("case_messages.id", ondelete="CASCADE"), nullable=True, index=True)
+    case_id = Column(Integer, ForeignKey("investigation_cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    uploaded_by = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    uploaded_by_role = Column(String(50), nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    mime_type = Column(String(100), nullable=False)
+    file_size = Column(Integer, nullable=False)
+    storage_key = Column(String(500), nullable=False)
+    sha256_hash = Column(String(64), nullable=False)
+    status = Column(String(50), default="CLEAN")
+    scan_status = Column(String(50), default="CLEAN")
+    evidence_id = Column(Integer, ForeignKey("evidence_files.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    message = relationship("CaseMessage", back_populates="attachments")
+    case = relationship("InvestigationCase", back_populates="attachments")
+    uploader = relationship("User")
+    evidence = relationship("EvidenceFile")
 
 
 class ForensicScan(Base):

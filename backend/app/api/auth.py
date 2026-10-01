@@ -20,6 +20,11 @@ from app.services.email_service import send_otp_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+BASE_BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+UPLOAD_DIR = os.path.join(BASE_BACKEND_DIR, "uploads")
+PROFILES_DIR = os.path.join(UPLOAD_DIR, "profiles")
+GOV_IDS_DIR = os.path.join(UPLOAD_DIR, "gov_ids")
+
 def get_db():
     db = SessionLocal()
     try:
@@ -415,9 +420,9 @@ def register_user(
     
     profile_pic_url = None
     if profile_picture_file and profile_picture_file.filename:
-        os.makedirs("uploads/profiles", exist_ok=True)
+        os.makedirs(PROFILES_DIR, exist_ok=True)
         unique_name = f"{uuid.uuid4().hex}_{profile_picture_file.filename}"
-        filepath = os.path.join("uploads/profiles", unique_name)
+        filepath = os.path.join(PROFILES_DIR, unique_name)
         with open(filepath, "wb") as buffer:
             shutil.copyfileobj(profile_picture_file.file, buffer)
         profile_pic_url = f"http://127.0.0.1:8000/api/v1/auth/document/profiles/{unique_name}"
@@ -494,9 +499,9 @@ def register_investigator(
         )
     
     # Save Government ID
-    os.makedirs("uploads/gov_ids", exist_ok=True)
+    os.makedirs(GOV_IDS_DIR, exist_ok=True)
     gov_id_unique_name = f"{uuid.uuid4().hex}_{government_id_file.filename}"
-    gov_id_path = os.path.join("uploads/gov_ids", gov_id_unique_name)
+    gov_id_path = os.path.join(GOV_IDS_DIR, gov_id_unique_name)
     with open(gov_id_path, "wb") as buffer:
         shutil.copyfileobj(government_id_file.file, buffer)
     gov_id_url = f"http://127.0.0.1:8000/api/v1/auth/document/gov_ids/{gov_id_unique_name}"
@@ -504,9 +509,9 @@ def register_investigator(
     # Save Profile Picture
     profile_pic_url = None
     if profile_picture_file and profile_picture_file.filename:
-        os.makedirs("uploads/profiles", exist_ok=True)
+        os.makedirs(PROFILES_DIR, exist_ok=True)
         prof_unique_name = f"{uuid.uuid4().hex}_{profile_picture_file.filename}"
-        prof_path = os.path.join("uploads/profiles", prof_unique_name)
+        prof_path = os.path.join(PROFILES_DIR, prof_unique_name)
         with open(prof_path, "wb") as buffer:
             shutil.copyfileobj(profile_picture_file.file, buffer)
         profile_pic_url = f"http://127.0.0.1:8000/api/v1/auth/document/profiles/{prof_unique_name}"
@@ -592,14 +597,14 @@ def verify_invitation(token: str, db: Session = Depends(get_db)):
 
 @router.get("/document/profiles/{filename}")
 def get_profile_picture(filename: str):
-    filepath = os.path.join("uploads/profiles", filename)
+    filepath = os.path.join(PROFILES_DIR, filename)
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(filepath)
 
 @router.get("/document/gov_ids/{filename}")
 def get_government_id(filename: str):
-    filepath = os.path.join("uploads/gov_ids", filename)
+    filepath = os.path.join(GOV_IDS_DIR, filename)
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(filepath)

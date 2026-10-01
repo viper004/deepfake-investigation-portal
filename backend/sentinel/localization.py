@@ -93,8 +93,26 @@ def create_localization_artifacts(
     overlay_path = os.path.join(output_dir, overlay_filename)
     overlay_pil.save(overlay_path, format="PNG")
 
+    min_val = float(mask_full_np.min())
+    max_val = float(mask_full_np.max())
+    mean_val = float(mask_full_np.mean())
+    fg_mask = mask_full_np >= localization_threshold
+    non_zero_count = int(np.count_nonzero(fg_mask))
+    foreground_pct = round((float(non_zero_count) / float(orig_w * orig_h)) * 100.0, 2)
+
+    metrics = {
+        "width": orig_w,
+        "height": orig_h,
+        "min": round(min_val, 4),
+        "max": round(max_val, 4),
+        "mean": round(mean_val, 4),
+        "non_zero_count": non_zero_count,
+        "foreground_pct": foreground_pct
+    }
+
     return {
         "mask_path": mask_path,
         "overlay_path": overlay_path,
-        "dimensions": (orig_w, orig_h)
+        "dimensions": (orig_w, orig_h),
+        "metrics": metrics
     }

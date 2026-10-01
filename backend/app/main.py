@@ -115,6 +115,13 @@ def init_db_updates():
         if not res_inv:
             db.execute(text("ALTER TABLE investigation_cases ADD COLUMN assigned_investigator_id INT NULL"))
 
+        # Sync assigned_expert and assigned_investigator_id columns
+        try:
+            db.execute(text("UPDATE investigation_cases SET assigned_investigator_id = assigned_expert WHERE assigned_expert IS NOT NULL AND assigned_investigator_id IS NULL"))
+            db.execute(text("UPDATE investigation_cases SET assigned_expert = assigned_investigator_id WHERE assigned_investigator_id IS NOT NULL AND assigned_expert IS NULL"))
+        except Exception as sync_e:
+            print("Sync column note:", sync_e)
+
         # Modify status column on investigation_cases to VARCHAR(50) DEFAULT 'DRAFT'
         try:
             db.execute(text("ALTER TABLE investigation_cases MODIFY COLUMN status VARCHAR(50) NOT NULL DEFAULT 'DRAFT'"))
@@ -216,6 +223,51 @@ def init_db_updates():
                     db.execute(text(f"ALTER TABLE ai_analysis ADD COLUMN {col_name} {col_def}"))
             except Exception as col_err:
                 print(f"ai_analysis col check note ({col_name}):", col_err)
+
+        # Ensure evidence_files has uploaded_by_role column
+        try:
+            res_ubr = db.execute(text("SHOW COLUMNS FROM evidence_files LIKE 'uploaded_by_role'")).fetchone()
+            if not res_ubr:
+                db.execute(text("ALTER TABLE evidence_files ADD COLUMN uploaded_by_role VARCHAR(50) NULL"))
+                db.execute(text("""
+                    UPDATE evidence_files ef
+                    JOIN users u ON ef.uploaded_by = u.id
+                    LEFT JOIN roles r ON u.role_id = r.id
+                    SET ef.uploaded_by_role = COALESCE(r.role_name, 'USER')
+                    WHERE ef.uploaded_by_role IS NULL
+                """))
+        except Exception as ubr_err:
+            print("evidence_files uploaded_by_role migration note:", ubr_err)
+
+        # Ensure message_attachments table exists
+        try:
+            db.execute(text("""
+                CREATE TABLE IF NOT EXISTS message_attachments (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    message_id INT NULL,
+                    case_id INT NOT NULL,
+                    uploaded_by INT NOT NULL,
+                    uploaded_by_role VARCHAR(50) NOT NULL,
+                    original_filename VARCHAR(255) NOT NULL,
+                    mime_type VARCHAR(100) NOT NULL,
+                    file_size INT NOT NULL,
+                    storage_key VARCHAR(500) NOT NULL,
+                    sha256_hash VARCHAR(64) NOT NULL,
+                    status VARCHAR(50) NOT NULL DEFAULT 'CLEAN',
+                    scan_status VARCHAR(50) NOT NULL DEFAULT 'CLEAN',
+                    evidence_id INT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_msg_att_case (case_id),
+                    INDEX idx_msg_att_msg (message_id),
+                    INDEX idx_msg_att_uploader (uploaded_by),
+                    FOREIGN KEY (case_id) REFERENCES investigation_cases(id) ON DELETE CASCADE,
+                    FOREIGN KEY (message_id) REFERENCES case_messages(id) ON DELETE CASCADE,
+                    FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (evidence_id) REFERENCES evidence_files(id) ON DELETE SET NULL
+                ) ENGINE=InnoDB;
+            """))
+        except Exception as mat_err:
+            print("message_attachments table creation note:", mat_err)
 
         db.commit()
     except Exception as e:
@@ -400,6 +452,7 @@ def seed_investigation_cases():
                     "description": "AI-generated video submitted as potential digital evidence for forensic analysis and verification.",
                     "created_by": creator_id,
                     "assigned_expert": investigator_id,
+                    "assigned_investigator_id": investigator_id,
                     "status": StatusEnum.CASE_UNDER_INVESTIGATION,
                     "incident_date": now - timedelta(days=2),
                     "submitted_at": now - timedelta(days=2),
@@ -411,6 +464,7 @@ def seed_investigation_cases():
                     "description": "Cloned voice recording claiming to be corporate executive authorizing unauthorized wire transfers.",
                     "created_by": creator_id,
                     "assigned_expert": investigator_id,
+                    "assigned_investigator_id": investigator_id,
                     "status": StatusEnum.CASE_UNDER_INVESTIGATION,
                     "incident_date": now - timedelta(days=5),
                     "submitted_at": now - timedelta(days=4),
@@ -422,6 +476,7 @@ def seed_investigation_cases():
                     "description": "High-resolution digital passport scan submitted for verification containing neural network facial tampering.",
                     "created_by": creator_id,
                     "assigned_expert": None,
+                    "assigned_investigator_id": None,
                     "status": StatusEnum.CASE_FILED,
                     "incident_date": now - timedelta(days=3),
                     "submitted_at": now - timedelta(days=3),
@@ -433,6 +488,7 @@ def seed_investigation_cases():
                     "description": "Altered video clip of political speech circulated on social media platforms.",
                     "created_by": creator_id,
                     "assigned_expert": investigator_id,
+                    "assigned_investigator_id": investigator_id,
                     "status": StatusEnum.CLOSED,
                     "incident_date": now - timedelta(days=10),
                     "submitted_at": now - timedelta(days=10),
@@ -444,6 +500,7 @@ def seed_investigation_cases():
                     "description": "Facial recognition spoof attempt detected at automated border control terminal.",
                     "created_by": creator_id,
                     "assigned_expert": investigator_id,
+                    "assigned_investigator_id": investigator_id,
                     "status": StatusEnum.CASE_UNDER_INVESTIGATION,
                     "incident_date": now - timedelta(days=1),
                     "submitted_at": now - timedelta(days=1),
@@ -777,12 +834,17 @@ def startup_load_sentinel_model():
     except Exception as e:
         print(f"[Startup Warning] Could not preload Sentinel AI model: {e}")
 
-# Disabled public StaticFiles directory for uploads to secure evidence files.
-# Evidence files are now served via authenticated /api/v1/user/evidence/{id}/download endpoints.
-os.makedirs("uploads", exist_ok=True)
-os.makedirs("uploads/analysis", exist_ok=True)
-os.makedirs("uploads/reports", exist_ok=True)
-# app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+# Base backend directory and uploads directory setup
+BASE_BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+UPLOAD_DIR = os.path.join(BASE_BACKEND_DIR, "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(os.path.join(UPLOAD_DIR, "analysis"), exist_ok=True)
+os.makedirs(os.path.join(UPLOAD_DIR, "reports"), exist_ok=True)
+os.makedirs(os.path.join(UPLOAD_DIR, "profiles"), exist_ok=True)
+os.makedirs(os.path.join(UPLOAD_DIR, "gov_ids"), exist_ok=True)
+
+# Mount /uploads directory to statically serve evidence and Sentinel AI analysis artifacts
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 # Configure CORS so frontend can call backend
 app.add_middleware(
@@ -812,6 +874,103 @@ app.include_router(admin_router, prefix="/api")
 app.include_router(admin_router, prefix="/api/v1")
 app.include_router(user_router, prefix="/api")
 app.include_router(user_router, prefix="/api/v1")
+
+from app.api.user import (
+    delete_evidence, get_db, get_current_user,
+    upload_case_attachment, get_case_messages, send_case_message,
+    get_case_attachment, download_case_attachment, delete_case_attachment,
+    promote_attachment_to_evidence, MessageCreate
+)
+from app.models.user import User
+from fastapi import Depends, UploadFile, File, Query, Header
+from typing import Optional
+
+@app.delete("/api/evidence/{evidence_id}")
+@app.delete("/api/v1/evidence/{evidence_id}")
+def delete_evidence_alias(
+    evidence_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    return delete_evidence(evidence_id=evidence_id, db=db, user=user)
+
+@app.post("/api/cases/{case_id}/attachments/upload")
+@app.post("/api/v1/cases/{case_id}/attachments/upload")
+async def upload_attachment_alias(
+    case_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    return await upload_case_attachment(case_id=case_id, file=file, db=db, user=user)
+
+@app.get("/api/cases/{case_id}/attachments/{attachment_id}")
+@app.get("/api/v1/cases/{case_id}/attachments/{attachment_id}")
+@app.get("/api/cases/{case_id}/messages/{message_id}/attachments/{attachment_id}")
+@app.get("/api/v1/cases/{case_id}/messages/{message_id}/attachments/{attachment_id}")
+def get_attachment_alias(
+    case_id: int,
+    attachment_id: int,
+    message_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    return get_case_attachment(case_id=case_id, attachment_id=attachment_id, message_id=message_id, db=db, user=user)
+
+@app.get("/api/cases/{case_id}/attachments/{attachment_id}/download")
+@app.get("/api/v1/cases/{case_id}/attachments/{attachment_id}/download")
+def download_attachment_alias(
+    case_id: int,
+    attachment_id: int,
+    expires: Optional[int] = Query(None),
+    signature: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+    token: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    return download_case_attachment(
+        case_id=case_id, attachment_id=attachment_id,
+        expires=expires, signature=signature, authorization=authorization, token=token, db=db
+    )
+
+@app.delete("/api/cases/{case_id}/attachments/{attachment_id}")
+@app.delete("/api/v1/cases/{case_id}/attachments/{attachment_id}")
+def delete_attachment_alias(
+    case_id: int,
+    attachment_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    return delete_case_attachment(case_id=case_id, attachment_id=attachment_id, db=db, user=user)
+
+@app.post("/api/cases/{case_id}/attachments/{attachment_id}/promote-to-evidence")
+@app.post("/api/v1/cases/{case_id}/attachments/{attachment_id}/promote-to-evidence")
+def promote_attachment_alias(
+    case_id: int,
+    attachment_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    return promote_attachment_to_evidence(case_id=case_id, attachment_id=attachment_id, db=db, user=user)
+
+@app.get("/api/cases/{case_id}/messages")
+@app.get("/api/v1/cases/{case_id}/messages")
+def get_case_messages_alias(
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    return get_case_messages(case_id=case_id, db=db, user=user)
+
+@app.post("/api/cases/{case_id}/messages")
+@app.post("/api/v1/cases/{case_id}/messages")
+def send_case_message_alias(
+    case_id: int,
+    payload: MessageCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    return send_case_message(case_id=case_id, payload=payload, db=db, user=user)
 
 @app.get("/")
 def root():
