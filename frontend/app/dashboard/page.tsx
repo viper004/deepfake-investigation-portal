@@ -1928,7 +1928,7 @@ function UserDashboardContent() {
 
       {/* ─── Top Header/Navbar ─── */}
       <nav className="bg-white border-b border-[#e5e5e5] shadow-sm sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
             
             {/* Logo & Mobile trigger */}
@@ -2079,7 +2079,7 @@ function UserDashboardContent() {
       </nav>
 
       {/* ─── Dashboard Content Grid ─── */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col md:flex-row gap-8 flex-1 w-full">
+      <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col md:flex-row gap-8 flex-1 w-full">
         
         {/* ─── Desktop Sidebar ─── */}
         <aside className="hidden md:block w-64 flex-shrink-0">
@@ -2387,10 +2387,10 @@ function UserDashboardContent() {
               </div>
 
               {/* Filters toolbar */}
-              <div className="flex flex-col sm:flex-row gap-3 bg-white p-4 border border-[#e5e5e5] rounded-lg shadow-sm">
+              <div className="flex flex-col sm:flex-row gap-3 bg-white p-4 border border-[#e5e5e5] rounded-lg shadow-sm w-full">
                 
                 {/* Search */}
-                <div className="relative flex-1">
+                <div className="relative flex-1 min-w-[200px]">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#0a0a0a]/40" />
                   <input
                     type="text"
@@ -2401,12 +2401,12 @@ function UserDashboardContent() {
                   />
                 </div>
 
-                {/* Status Filter */}
-                <div className="flex gap-2">
+                {/* Status & Sort Filters */}
+                <div className="flex flex-wrap sm:flex-nowrap gap-2 sm:flex-shrink-0">
                   <select
                     value={casesStatusFilter}
                     onChange={(e) => { setCasesStatusFilter(e.target.value); setCasesPage(1); }}
-                    className="bg-slate-50 border border-[#e5e5e5] rounded-md text-sm px-3 py-2 outline-none focus:ring-1 focus:ring-[#CC2200] text-[#0a0a0a]"
+                    className="w-full sm:w-52 bg-slate-50 border border-[#e5e5e5] rounded-md text-sm px-3 py-2 outline-none focus:ring-1 focus:ring-[#CC2200] text-[#0a0a0a] cursor-pointer"
                   >
                     <option value="">All Statuses</option>
                     <option value="DRAFT">Draft</option>
@@ -2415,11 +2415,10 @@ function UserDashboardContent() {
                     <option value="CLOSED">Closed</option>
                   </select>
 
-                  {/* Sort */}
                   <select
                     value={casesSortBy}
                     onChange={(e) => { setCasesSortBy(e.target.value); setCasesPage(1); }}
-                    className="bg-slate-50 border border-[#e5e5e5] rounded-md text-sm px-3 py-2 outline-none focus:ring-1 focus:ring-[#CC2200] text-[#0a0a0a]"
+                    className="w-full sm:w-36 bg-slate-50 border border-[#e5e5e5] rounded-md text-sm px-3 py-2 outline-none focus:ring-1 focus:ring-[#CC2200] text-[#0a0a0a] cursor-pointer"
                   >
                     <option value="newest">Newest First</option>
                     <option value="oldest">Oldest First</option>
@@ -2429,7 +2428,7 @@ function UserDashboardContent() {
               </div>
 
               {/* Cases Table */}
-              <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm overflow-hidden">
+              <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm overflow-hidden w-full">
                 {casesLoading ? (
                   <div className="p-8 space-y-4">
                     {[1, 2, 3, 4].map(i => (
@@ -2456,26 +2455,26 @@ function UserDashboardContent() {
                     No investigation cases match your filters.
                   </div>
                 ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse text-sm min-w-[800px] table-fixed">
+                  <div className="w-full overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-sm table-fixed">
                       <thead>
                         <tr className="bg-slate-50 border-b border-[#e5e5e5] text-xs font-bold text-[#0a0a0a]/60 uppercase tracking-wider">
                           {isInvestigator ? (
                             <>
-                              <th className="px-4 py-4 w-[20%] min-w-[140px] whitespace-nowrap">Case Code</th>
-                              <th className="px-4 py-4 w-[31%] min-w-[210px]">Title</th>
-                              <th className="px-4 py-4 w-[18%] min-w-[150px] whitespace-nowrap">Status</th>
-                              <th className="px-4 py-4 w-[16%] min-w-[130px] whitespace-nowrap">Last Updated</th>
-                              <th className="px-4 py-4 text-center w-[15%] min-w-[160px] whitespace-nowrap">ACTIONS</th>
+                              <th scope="col" className="px-4 py-3.5 w-[22%] text-left">Case Code</th>
+                              <th scope="col" className="px-4 py-3.5 w-[30%] text-left">Title</th>
+                              <th scope="col" className="px-4 py-3.5 w-[18%] text-left">Status</th>
+                              <th scope="col" className="px-4 py-3.5 w-[15%] text-left">Last Updated</th>
+                              <th scope="col" className="px-4 py-3.5 w-[15%] text-center">Actions</th>
                             </>
                           ) : (
                             <>
-                              <th className="px-4 py-4 w-[18%] min-w-[130px] whitespace-nowrap">Case Code</th>
-                              <th className="px-4 py-4 w-[29%] min-w-[190px]">Title</th>
-                              <th className="px-4 py-4 w-[18%] min-w-[150px] whitespace-nowrap">Status</th>
-                              <th className="px-4 py-4 w-[10%] min-w-[110px] whitespace-nowrap">Incident Date</th>
-                              <th className="px-4 py-4 w-[10%] min-w-[110px] whitespace-nowrap">Created On</th>
-                              <th className="px-4 py-4 text-center w-[15%] min-w-[160px] whitespace-nowrap">ACTIONS</th>
+                              <th scope="col" className="px-4 py-3.5 w-[20%] text-left">Case Code</th>
+                              <th scope="col" className="px-4 py-3.5 w-[28%] text-left">Title</th>
+                              <th scope="col" className="px-4 py-3.5 w-[16%] text-left">Status</th>
+                              <th scope="col" className="px-4 py-3.5 w-[11%] text-left">Incident Date</th>
+                              <th scope="col" className="px-4 py-3.5 w-[11%] text-left">Created On</th>
+                              <th scope="col" className="px-4 py-3.5 w-[14%] text-center">Actions</th>
                             </>
                           )}
                         </tr>
@@ -2483,49 +2482,72 @@ function UserDashboardContent() {
                       <tbody className="divide-y divide-[#e5e5e5] text-sm">
                         {cases.map((c: any) => (
                           <tr key={c.id} className="hover:bg-slate-50/50 transition-colors">
-                            <td className="px-4 py-4 font-bold whitespace-nowrap">
+                            {/* CASE CODE */}
+                            <td className="px-4 py-3.5 font-bold align-middle overflow-hidden">
                               <button
                                 type="button"
                                 onClick={() => viewCaseDetails(c.id)}
-                                className="text-[#CC2200] hover:underline cursor-pointer font-bold text-left font-mono"
+                                title={c.case_number}
+                                className="text-[#CC2200] hover:underline cursor-pointer font-bold text-left font-mono truncate max-w-full block"
                               >
                                 {c.case_number}
                               </button>
                             </td>
-                            <td className="px-4 py-4">
-                              <p className="font-semibold text-[#0a0a0a] line-clamp-1">{c.title}</p>
-                              <p className="text-xs text-[#0a0a0a]/50 truncate">{c.description}</p>
+
+                            {/* TITLE & DESCRIPTION */}
+                            <td className="px-4 py-3.5 align-middle overflow-hidden">
+                              <p className="font-bold text-[#0a0a0a] text-sm leading-tight line-clamp-2 break-words" title={c.title}>
+                                {c.title}
+                              </p>
+                              {c.description && (
+                                <p className="text-xs text-[#0a0a0a]/50 line-clamp-1 break-words mt-0.5" title={c.description}>
+                                  {c.description}
+                                </p>
+                              )}
                             </td>
-                            <td className="px-4 py-4 whitespace-nowrap">{renderStatusBadge(c.status)}</td>
+
+                            {/* STATUS BADGE */}
+                            <td className="px-4 py-3.5 align-middle whitespace-nowrap overflow-hidden">
+                              {renderStatusBadge(c.status)}
+                            </td>
+
                             {isInvestigator ? (
                               <>
-                                <td className="px-4 py-4 text-xs text-[#0a0a0a]/60 whitespace-nowrap">
+                                {/* LAST UPDATED */}
+                                <td className="px-4 py-3.5 text-xs text-[#0a0a0a]/60 align-middle whitespace-nowrap overflow-hidden">
                                   {formatDate(c.updated_at || c.created_at)}
                                 </td>
-                                <td className="px-4 py-4 text-center whitespace-nowrap">
+
+                                {/* ACTIONS */}
+                                <td className="px-4 py-3.5 text-center align-middle whitespace-nowrap">
                                   <button
                                     onClick={() => viewCaseDetails(c.id)}
-                                    className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-[#CC2200] hover:bg-[#a81c00] text-white text-xs font-bold rounded-md shadow-xs transition-colors whitespace-nowrap cursor-pointer w-full min-w-[135px] max-w-[150px] mx-auto"
+                                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#CC2200] hover:bg-[#a81c00] text-white text-xs font-bold rounded-md shadow-xs transition-colors cursor-pointer"
                                   >
-                                    <Eye className="h-4 w-4 flex-shrink-0" />
+                                    <Eye className="h-3.5 w-3.5 flex-shrink-0" />
                                     <span>View Case</span>
                                   </button>
                                 </td>
                               </>
                             ) : (
                               <>
-                                <td className="px-4 py-4 text-xs text-[#0a0a0a]/60 whitespace-nowrap">
+                                {/* INCIDENT DATE */}
+                                <td className="px-4 py-3.5 text-xs text-[#0a0a0a]/60 align-middle whitespace-nowrap overflow-hidden">
                                   {formatDate(c.incident_date)}
                                 </td>
-                                <td className="px-4 py-4 text-xs text-[#0a0a0a]/60 whitespace-nowrap">
+
+                                {/* CREATED ON */}
+                                <td className="px-4 py-3.5 text-xs text-[#0a0a0a]/60 align-middle whitespace-nowrap overflow-hidden">
                                   {formatDate(c.created_at)}
                                 </td>
-                                <td className="px-4 py-4 text-center whitespace-nowrap">
+
+                                {/* ACTIONS */}
+                                <td className="px-4 py-3.5 text-center align-middle whitespace-nowrap">
                                   <button
                                     onClick={() => viewCaseDetails(c.id)}
-                                    className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-[#CC2200] hover:bg-[#a81c00] text-white text-xs font-bold rounded-md shadow-xs transition-colors whitespace-nowrap cursor-pointer w-full min-w-[135px] max-w-[150px] mx-auto"
+                                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#CC2200] hover:bg-[#a81c00] text-white text-xs font-bold rounded-md shadow-xs transition-colors cursor-pointer"
                                   >
-                                    <Eye className="h-4 w-4 flex-shrink-0" />
+                                    <Eye className="h-3.5 w-3.5 flex-shrink-0" />
                                     <span>View Case</span>
                                   </button>
                                 </td>
@@ -4287,7 +4309,7 @@ function UserDashboardContent() {
 
       {/* ─── Footer ─── */}
       <footer className="border-t border-[#e5e5e5] bg-white py-6 mt-auto">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-xs text-[#0a0a0a]/40">
+        <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 text-center text-xs text-[#0a0a0a]/40">
           © {new Date().getFullYear()} Sentinel AI. Confident deepfake detection forensic workflows.
         </div>
       </footer>
