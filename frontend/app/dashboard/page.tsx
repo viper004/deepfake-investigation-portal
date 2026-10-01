@@ -544,6 +544,7 @@ function UserDashboardContent() {
   const [scanProgress, setScanProgress] = useState(0);
   const [scanStage, setScanStage] = useState("");
   const [scanResult, setScanResult] = useState<any>(null);
+  const [isAnalysisExpanded, setIsAnalysisExpanded] = useState(true);
 
   const scanStages = [
     "Initializing forensic analysis",
@@ -2872,19 +2873,30 @@ function UserDashboardContent() {
                   {/* AI Forensic Analysis Section - Investigator Workspace */}
                   {isInvestigator && (
                     <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm overflow-hidden">
-                      <div className="px-5 py-4 border-b border-[#e5e5e5] bg-slate-50/50 flex justify-between items-center">
+                      <button
+                        type="button"
+                        onClick={() => setIsAnalysisExpanded((prev) => !prev)}
+                        aria-expanded={isAnalysisExpanded}
+                        aria-controls="investigator-forensic-analysis-content"
+                        className={`w-full px-5 py-4 bg-slate-50/50 hover:bg-slate-100/80 transition-colors flex justify-between items-center text-left cursor-pointer focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[#CC2200] ${
+                          isAnalysisExpanded ? "border-b border-[#e5e5e5]" : ""
+                        }`}
+                      >
                         <div className="flex items-center gap-2">
                           <BrainCircuit className="h-4 w-4 text-[#CC2200]" />
                           <h3 className="font-bold text-sm">AI Forensic Analysis</h3>
                         </div>
-                        {scanResult && !isScanning && (
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            Demonstration Scan
-                          </span>
-                        )}
-                      </div>
+                        <div className="text-slate-500 hover:text-slate-700 transition-colors">
+                          {isAnalysisExpanded ? (
+                            <ChevronUp className="h-4 w-4" aria-hidden="true" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4" aria-hidden="true" />
+                          )}
+                        </div>
+                      </button>
 
-                      <div className="p-6 space-y-6">
+                      {isAnalysisExpanded && (
+                        <div id="investigator-forensic-analysis-content" className="p-6 space-y-6">
                         {/* Scanning Animation State */}
                         {isScanning ? (
                           <div className="bg-slate-900 text-white rounded-lg p-6 space-y-4 shadow-inner text-center animate-pulse">
@@ -3084,7 +3096,8 @@ function UserDashboardContent() {
                             </button>
                           </div>
                         )}
-                      </div>
+                        </div>
+                      )}
                     </div>
                   )}
                   </>
