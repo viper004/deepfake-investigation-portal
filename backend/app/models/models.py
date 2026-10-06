@@ -8,7 +8,12 @@ from app.database.database import Base
 class StatusEnum(enum.Enum):
     DRAFT = "DRAFT"
     CASE_FILED = "CASE_FILED"
+    ASSIGNED = "ASSIGNED"
+    IN_PROGRESS = "IN_PROGRESS"
     CASE_UNDER_INVESTIGATION = "CASE_UNDER_INVESTIGATION"
+    FORWARDED_TO_EXPERT = "FORWARDED_TO_EXPERT"
+    UNDER_EXPERT_REVIEW = "UNDER_EXPERT_REVIEW"
+    VERIFIED = "VERIFIED"
     CLOSED = "CLOSED"
 
     # Legacy/compatibility values
@@ -61,12 +66,17 @@ class InvestigationCase(Base):
     title = Column(String(200), nullable=False)
     description = Column(Text)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
-    assigned_expert = Column(Integer, ForeignKey("users.id"))
+    assigned_expert = Column(Integer, ForeignKey("users.id"), nullable=True)
     assigned_investigator_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     status = Column(Enum(StatusEnum), default=StatusEnum.DRAFT)
     incident_date = Column(DateTime(timezone=True))
     submitted_at = Column(DateTime(timezone=True), nullable=True)
     opened_at = Column(DateTime(timezone=True), nullable=True)
+    forwarded_to_expert_at = Column(DateTime(timezone=True), nullable=True)
+    investigator_completed_at = Column(DateTime(timezone=True), nullable=True)
+    expert_review_status = Column(String(50), nullable=True, default="PENDING")
+    expert_verified_at = Column(DateTime(timezone=True), nullable=True)
+    closed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -300,5 +310,36 @@ class InvestigatorNote(Base):
     case = relationship("InvestigationCase")
     investigator = relationship("User", foreign_keys=[investigator_id])
 
+class InvestigationDocument(Base):
+    __tablename__ = "investigation_documents"
+    id = Column(Integer, primary_key=True, index=True)
+    case_id = Column(Integer, ForeignKey("investigation_cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    investigator_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    stored_path = Column(String(500), nullable=False)
+    mime_type = Column(String(100), nullable=False)
+    file_size = Column(Integer, nullable=False)
+    sha256_hash = Column(String(64), nullable=True)
+    uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    case = relationship("InvestigationCase")
+    investigator = relationship("User")
+
+class FinalCaseReport(Base):
+    __tablename__ = "final_case_reports"
+    id = Column(Integer, primary_key=True, index=True)
+    case_id = Column(Integer, ForeignKey("investigation_cases.id", ondelete="CASCADE"), nullable=False, index=True, unique=True)
+    investigator_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    stored_path = Column(String(500), nullable=False)
+    mime_type = Column(String(100), nullable=False)
+    file_size = Column(Integer, nullable=False)
+    sha256_hash = Column(String(64), nullable=True)
+    version = Column(Integer, default=1)
+    is_submitted = Column(Boolean, default=False)
+    uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
+    submitted_at = Column(DateTime(timezone=True), nullable=True)
+
+    case = relationship("InvestigationCase")
+    investigator = relationship("User")
 

@@ -16,7 +16,7 @@ import json
 from app.database.database import SessionLocal
 from app.models.models import (
     InvestigationCase, EvidenceFile, MediaMetadata, AIModel, AIAnalysis,
-    ForensicReview, InvestigationNote, InvestigatorNote, Report, Notification, AuditLog, CaseMessage,
+    ForensicReview, InvestigationNote, InvestigatorNote, InvestigationDocument, Report, Notification, AuditLog, CaseMessage,
     ForensicScan, StatusEnum, FileTypeEnum, AIResultEnum, ReportTypeEnum, MediaTypeEnum, MessageAttachment
 )
 from app.schemas.user import InvestigatorNoteCreate, InvestigatorNoteUpdate, InvestigatorNoteResponse
@@ -141,16 +141,23 @@ def get_user_stats(
         ).count()
         total_cases = db.query(InvestigationCase).count()
         open_cases = db.query(InvestigationCase).filter(
-            InvestigationCase.status.in_([StatusEnum.CASE_FILED, StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.CASE_OPENED, StatusEnum.OPEN])
+            InvestigationCase.status.in_([StatusEnum.CASE_FILED, StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.CASE_OPENED, StatusEnum.OPEN, StatusEnum.ASSIGNED, StatusEnum.IN_PROGRESS])
         ).count()
         under_analysis = db.query(InvestigationCase).filter(
-            InvestigationCase.status.in_([StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.UNDER_ANALYSIS])
+            InvestigationCase.status.in_([StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.UNDER_ANALYSIS, StatusEnum.IN_PROGRESS])
         ).count()
         closed_cases = db.query(InvestigationCase).filter(InvestigationCase.status == StatusEnum.CLOSED).count()
+        completed_cases = db.query(InvestigationCase).filter(
+            or_(
+                InvestigationCase.forwarded_to_expert_at.isnot(None),
+                InvestigationCase.status.in_([StatusEnum.FORWARDED_TO_EXPERT, StatusEnum.UNDER_EXPERT_REVIEW, StatusEnum.VERIFIED, StatusEnum.CLOSED])
+            )
+        ).count()
         evidence_uploaded = db.query(EvidenceFile).count()
         ai_completed = db.query(AIAnalysis).count()
         reports_count = db.query(Report).count()
         assigned_cases = open_cases
+        in_progress_cases = under_analysis
     elif is_investigator(user):
         assigned_cond = or_(InvestigationCase.assigned_expert == user.id, InvestigationCase.assigned_investigator_id == user.id)
         available_cases = db.query(InvestigationCase).filter(
@@ -158,27 +165,54 @@ def get_user_stats(
             InvestigationCase.assigned_expert == None,
             InvestigationCase.assigned_investigator_id == None
         ).count()
+        # 1. Active assigned workload
         assigned_cases = db.query(InvestigationCase).filter(
             assigned_cond,
+            InvestigationCase.forwarded_to_expert_at.is_(None),
+            InvestigationCase.investigator_completed_at.is_(None),
             InvestigationCase.status.in_([
+                StatusEnum.ASSIGNED,
+                StatusEnum.IN_PROGRESS,
                 StatusEnum.CASE_UNDER_INVESTIGATION,
                 StatusEnum.CASE_OPENED,
                 StatusEnum.UNDER_ANALYSIS,
-                StatusEnum.EXPERT_REVIEW,
                 StatusEnum.OPEN,
                 StatusEnum.REVIEW
             ])
         ).count()
+        # 2. In progress cases
+        in_progress_cases = db.query(InvestigationCase).filter(
+            assigned_cond,
+            InvestigationCase.forwarded_to_expert_at.is_(None),
+            InvestigationCase.investigator_completed_at.is_(None),
+            InvestigationCase.status.in_([
+                StatusEnum.IN_PROGRESS,
+                StatusEnum.CASE_UNDER_INVESTIGATION,
+                StatusEnum.UNDER_ANALYSIS
+            ])
+        ).count()
+        # 3. Completed cases by this investigator
+        completed_cases = db.query(InvestigationCase).filter(
+            assigned_cond,
+            or_(
+                InvestigationCase.forwarded_to_expert_at.isnot(None),
+                InvestigationCase.investigator_completed_at.isnot(None),
+                InvestigationCase.status.in_([
+                    StatusEnum.FORWARDED_TO_EXPERT,
+                    StatusEnum.UNDER_EXPERT_REVIEW,
+                    StatusEnum.VERIFIED
+                ]),
+                and_(
+                    InvestigationCase.status == StatusEnum.CLOSED,
+                    InvestigationCase.forwarded_to_expert_at.isnot(None)
+                )
+            )
+        ).count()
+
         total_cases = db.query(InvestigationCase).filter(assigned_cond).count()
         open_cases = assigned_cases
-        under_analysis = db.query(InvestigationCase).filter(
-            assigned_cond,
-            InvestigationCase.status.in_([StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.UNDER_ANALYSIS])
-        ).count()
-        closed_cases = db.query(InvestigationCase).filter(
-            assigned_cond,
-            InvestigationCase.status == StatusEnum.CLOSED
-        ).count()
+        under_analysis = in_progress_cases
+        closed_cases = completed_cases
         evidence_uploaded = db.query(EvidenceFile).join(InvestigationCase).filter(
             assigned_cond
         ).count()
@@ -189,15 +223,18 @@ def get_user_stats(
     else:
         available_cases = 0
         assigned_cases = 0
+        in_progress_cases = 0
+        completed_cases = 0
         total_cases = db.query(InvestigationCase).filter(InvestigationCase.created_by == user.id).count()
         open_cases = db.query(InvestigationCase).filter(
             InvestigationCase.created_by == user.id,
-            InvestigationCase.status.in_([StatusEnum.CASE_FILED, StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.CASE_OPENED, StatusEnum.OPEN])
+            InvestigationCase.status.in_([StatusEnum.CASE_FILED, StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.CASE_OPENED, StatusEnum.OPEN, StatusEnum.ASSIGNED, StatusEnum.IN_PROGRESS])
         ).count()
         under_analysis = db.query(InvestigationCase).filter(
             InvestigationCase.created_by == user.id,
-            InvestigationCase.status.in_([StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.UNDER_ANALYSIS])
+            InvestigationCase.status.in_([StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.UNDER_ANALYSIS, StatusEnum.IN_PROGRESS])
         ).count()
+        in_progress_cases = under_analysis
         closed_cases = db.query(InvestigationCase).filter(
             InvestigationCase.created_by == user.id,
             InvestigationCase.status == StatusEnum.CLOSED
@@ -211,6 +248,9 @@ def get_user_stats(
     return {
         "availableCases": available_cases,
         "assignedCases": assigned_cases,
+        "inProgressCases": in_progress_cases,
+        "inProgress": in_progress_cases,
+        "completedCases": completed_cases,
         "totalCases": total_cases,
         "openCases": open_cases,
         "underAnalysis": under_analysis,
@@ -333,6 +373,34 @@ def get_assigned_cases(
 ):
     return get_cases(search=search, status_filter=status_filter, scope="assigned", sort_by=sort_by, page=page, limit=limit, db=db, user=user)
 
+@router.get("/cases/completed")
+def get_completed_cases(
+    search: Optional[str] = None,
+    status_filter: Optional[str] = None,
+    sort_by: Optional[str] = "newest",
+    page: int = 1,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    if not is_investigator_or_admin(user):
+        raise HTTPException(status_code=403, detail="Access denied: Only investigators or administrators can view completed cases.")
+    return get_cases(search=search, status_filter=status_filter, scope="completed", sort_by=sort_by, page=page, limit=limit, db=db, user=user)
+
+@router.get("/cases/expert-review")
+def get_expert_review_cases(
+    search: Optional[str] = None,
+    status_filter: Optional[str] = None,
+    sort_by: Optional[str] = "newest",
+    page: int = 1,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    if not is_investigator_or_admin(user):
+        raise HTTPException(status_code=403, detail="Access denied: Only experts, investigators or administrators can view cases awaiting expert review.")
+    return get_cases(search=search, status_filter=status_filter, scope="expert", sort_by=sort_by, page=page, limit=limit, db=db, user=user)
+
 @router.get("/cases/all")
 def get_all_cases(
     search: Optional[str] = None,
@@ -366,7 +434,50 @@ def get_cases(
         )
     elif scope in ["assigned", "assigned_cases"]:
         assigned_cond = or_(InvestigationCase.assigned_expert == user.id, InvestigationCase.assigned_investigator_id == user.id)
-        query = db.query(InvestigationCase).filter(assigned_cond)
+        # Active investigator workload: exclude completed/forwarded cases
+        query = db.query(InvestigationCase).filter(
+            assigned_cond,
+            InvestigationCase.forwarded_to_expert_at.is_(None),
+            InvestigationCase.investigator_completed_at.is_(None),
+            InvestigationCase.status.in_([
+                StatusEnum.ASSIGNED,
+                StatusEnum.IN_PROGRESS,
+                StatusEnum.CASE_UNDER_INVESTIGATION,
+                StatusEnum.CASE_OPENED,
+                StatusEnum.UNDER_ANALYSIS,
+                StatusEnum.OPEN,
+                StatusEnum.REVIEW
+            ])
+        )
+    elif scope in ["completed", "completed_cases"]:
+        assigned_cond = or_(InvestigationCase.assigned_investigator_id == user.id, InvestigationCase.assigned_expert == user.id)
+        # Completed cases by THIS investigator that were forwarded to expert
+        query = db.query(InvestigationCase).filter(
+            assigned_cond,
+            or_(
+                InvestigationCase.forwarded_to_expert_at.isnot(None),
+                InvestigationCase.investigator_completed_at.isnot(None),
+                InvestigationCase.status.in_([
+                    StatusEnum.FORWARDED_TO_EXPERT,
+                    StatusEnum.UNDER_EXPERT_REVIEW,
+                    StatusEnum.VERIFIED
+                ]),
+                and_(
+                    InvestigationCase.status == StatusEnum.CLOSED,
+                    InvestigationCase.forwarded_to_expert_at.isnot(None)
+                )
+            )
+        )
+    elif scope in ["expert", "expert_review"]:
+        query = db.query(InvestigationCase).filter(
+            or_(
+                InvestigationCase.status.in_([
+                    StatusEnum.FORWARDED_TO_EXPERT,
+                    StatusEnum.UNDER_EXPERT_REVIEW
+                ]),
+                InvestigationCase.expert_review_status.in_(["PENDING", "UNDER_REVIEW"])
+            )
+        )
     elif scope in ["all", "all_cases"]:
         if is_investigator_or_admin(user):
             query = db.query(InvestigationCase)
@@ -397,13 +508,26 @@ def get_cases(
             query = query.filter(InvestigationCase.status == StatusEnum.CASE_FILED)
         elif sf in ["ASSIGNED", "CASE_UNDER_INVESTIGATION", "UNDER_INVESTIGATION", "UNDER INVESTIGATION"]:
             query = query.filter(InvestigationCase.status.in_([
+                StatusEnum.ASSIGNED,
+                StatusEnum.IN_PROGRESS,
                 StatusEnum.CASE_UNDER_INVESTIGATION,
                 StatusEnum.CASE_OPENED,
                 StatusEnum.UNDER_ANALYSIS,
-                StatusEnum.EXPERT_REVIEW,
                 StatusEnum.OPEN,
                 StatusEnum.REVIEW
             ]))
+        elif sf in ["IN_PROGRESS", "IN PROGRESS"]:
+            query = query.filter(InvestigationCase.status.in_([
+                StatusEnum.IN_PROGRESS,
+                StatusEnum.CASE_UNDER_INVESTIGATION,
+                StatusEnum.UNDER_ANALYSIS
+            ]))
+        elif sf in ["FORWARDED_TO_EXPERT", "FORWARDED", "FORWARDED TO EXPERT"]:
+            query = query.filter(InvestigationCase.status == StatusEnum.FORWARDED_TO_EXPERT)
+        elif sf in ["UNDER_EXPERT_REVIEW", "UNDER REVIEW", "UNDER_REVIEW", "EXPERT_REVIEW"]:
+            query = query.filter(InvestigationCase.status.in_([StatusEnum.UNDER_EXPERT_REVIEW, StatusEnum.EXPERT_REVIEW]))
+        elif sf in ["VERIFIED", "APPROVED"]:
+            query = query.filter(InvestigationCase.status == StatusEnum.VERIFIED)
         elif sf in ["CLOSED", "COMPLETED"]:
             query = query.filter(InvestigationCase.status == StatusEnum.CLOSED)
         elif sf == "DRAFT":
@@ -416,6 +540,8 @@ def get_cases(
 
     if sort_by == "oldest":
         query = query.order_by(InvestigationCase.id)
+    elif sort_by == "forwarded":
+        query = query.order_by(desc(InvestigationCase.forwarded_to_expert_at))
     else:
         query = query.order_by(desc(InvestigationCase.created_at))
 
@@ -428,8 +554,27 @@ def get_cases(
         total_ev = len(c.evidence_files) if c.evidence_files else 0
         analyzed_ev = sum(1 for ef in (c.evidence_files or []) if ef.analyses)
         ai_prog = f"{analyzed_ev}/{total_ev} Scanned" if total_ev > 0 else "Pending AI"
-        exp_name = c.expert.full_name if c.expert else (c.assigned_investigator.full_name if c.assigned_investigator else None)
-        exp_id = c.assigned_expert or c.assigned_investigator_id
+        exp_name = c.expert.full_name if c.expert else None
+        inv_name = c.assigned_investigator.full_name if c.assigned_investigator else (c.expert.full_name if c.expert else None)
+        inv_id = c.assigned_investigator_id or c.assigned_expert
+        exp_id = c.assigned_expert
+
+        # Derived expert review status
+        if c.expert_review_status:
+            exp_rev_st = c.expert_review_status
+        elif c.status == StatusEnum.VERIFIED:
+            exp_rev_st = "VERIFIED"
+        elif c.status == StatusEnum.UNDER_EXPERT_REVIEW:
+            exp_rev_st = "UNDER_REVIEW"
+        elif c.status == StatusEnum.FORWARDED_TO_EXPERT:
+            exp_rev_st = "PENDING"
+        elif c.status == StatusEnum.CLOSED:
+            exp_rev_st = "CLOSED"
+        else:
+            exp_rev_st = "PENDING"
+
+        fwd_date = c.forwarded_to_expert_at or c.investigator_completed_at
+        date_assigned = c.opened_at or c.created_at
 
         cases_list.append({
             "id": c.id,
@@ -437,18 +582,27 @@ def get_cases(
             "title": c.title,
             "description": c.description,
             "status": c.status.value,
+            "category": "Forensic Investigation",
             "ai_progress": ai_prog,
             "incident_date": c.incident_date.isoformat() if c.incident_date else None,
             "created_at": c.created_at.isoformat() if c.created_at else None,
             "submitted_at": c.submitted_at.isoformat() if c.submitted_at else (c.created_at.isoformat() if c.created_at else None),
             "opened_at": c.opened_at.isoformat() if c.opened_at else None,
+            "forwarded_to_expert_at": fwd_date.isoformat() if fwd_date else None,
+            "investigator_completed_at": fwd_date.isoformat() if fwd_date else None,
+            "date_assigned": date_assigned.isoformat() if date_assigned else None,
+            "forwarded_date": fwd_date.isoformat() if fwd_date else None,
+            "expert_review_status": exp_rev_st,
+            "expert_verified_at": c.expert_verified_at.isoformat() if c.expert_verified_at else None,
+            "closed_at": c.closed_at.isoformat() if c.closed_at else None,
+            "is_investigation_completed": bool(fwd_date is not None or c.status in [StatusEnum.FORWARDED_TO_EXPERT, StatusEnum.UNDER_EXPERT_REVIEW, StatusEnum.VERIFIED, StatusEnum.CLOSED]),
             "updated_at": c.updated_at.isoformat() if c.updated_at else (c.created_at.isoformat() if c.created_at else None),
             "assigned_expert": exp_name,
             "assigned_expert_id": exp_id,
             "assigned_expert_name": exp_name,
-            "assigned_investigator_id": exp_id,
-            "assigned_investigator_name": exp_name,
-            "is_assigned_to_me": bool(exp_id == user.id),
+            "assigned_investigator_id": inv_id,
+            "assigned_investigator_name": inv_name,
+            "is_assigned_to_me": bool((inv_id and inv_id == user.id) or (exp_id and exp_id == user.id)),
             "created_by": c.created_by,
             "creator_name": c.creator.full_name if c.creator else "Anonymous Reporter",
             "evidence_count": total_ev
@@ -460,6 +614,7 @@ def get_cases(
         "page": page,
         "limit": limit
     }
+
 
 @router.get("/cases/open-cases")
 @router.get("/open-cases")
@@ -661,7 +816,11 @@ def open_case(
     assigned_cond = or_(InvestigationCase.assigned_expert == user.id, InvestigationCase.assigned_investigator_id == user.id)
     active_cases_count = db.query(InvestigationCase).filter(
         assigned_cond,
+        InvestigationCase.forwarded_to_expert_at.is_(None),
+        InvestigationCase.investigator_completed_at.is_(None),
         InvestigationCase.status.in_([
+            StatusEnum.ASSIGNED,
+            StatusEnum.IN_PROGRESS,
             StatusEnum.CASE_OPENED,
             StatusEnum.UNDER_ANALYSIS,
             StatusEnum.EXPERT_REVIEW,
@@ -681,6 +840,9 @@ def open_case(
     c.opened_at = datetime.now(timezone.utc)
     c.assigned_expert = user.id
     c.assigned_investigator_id = user.id
+    c.forwarded_to_expert_at = None
+    c.investigator_completed_at = None
+    c.expert_review_status = "PENDING"
     db.commit()
     
     log_audit_event(db, c.id, user.id, "Case Assigned to Investigator", f"Investigation accepted and assigned to investigator {user.full_name}.")
@@ -877,22 +1039,46 @@ def get_case_detail(
                 "timestamp": a.timestamp.isoformat() if a.timestamp else None
             })
         
+    fwd_date = c.forwarded_to_expert_at or c.investigator_completed_at
+    date_assigned = c.opened_at or c.created_at
+    if c.expert_review_status:
+        exp_rev_st = c.expert_review_status
+    elif c.status == StatusEnum.VERIFIED:
+        exp_rev_st = "VERIFIED"
+    elif c.status == StatusEnum.UNDER_EXPERT_REVIEW:
+        exp_rev_st = "UNDER_REVIEW"
+    elif c.status == StatusEnum.FORWARDED_TO_EXPERT:
+        exp_rev_st = "PENDING"
+    elif c.status == StatusEnum.CLOSED:
+        exp_rev_st = "CLOSED"
+    else:
+        exp_rev_st = "PENDING"
+
     return {
         "id": c.id,
         "case_number": c.case_number,
         "title": c.title,
         "description": c.description,
         "status": c.status.value,
+        "category": "Forensic Investigation",
         "incident_date": c.incident_date.isoformat() if c.incident_date else None,
         "created_at": c.created_at.isoformat() if c.created_at else None,
         "submitted_at": c.submitted_at.isoformat() if c.submitted_at else None,
         "opened_at": c.opened_at.isoformat() if c.opened_at else None,
-        "assigned_expert": c.expert.full_name if c.expert else (c.assigned_investigator.full_name if c.assigned_investigator else None),
-        "assigned_expert_id": c.assigned_expert or c.assigned_investigator_id,
-        "assigned_expert_name": c.expert.full_name if c.expert else (c.assigned_investigator.full_name if c.assigned_investigator else None),
-        "assigned_investigator_id": c.assigned_expert or c.assigned_investigator_id,
-        "assigned_investigator_name": c.expert.full_name if c.expert else (c.assigned_investigator.full_name if c.assigned_investigator else None),
-        "is_assigned_to_me": bool((c.assigned_expert and c.assigned_expert == user.id) or (c.assigned_investigator_id and c.assigned_investigator_id == user.id)),
+        "forwarded_to_expert_at": fwd_date.isoformat() if fwd_date else None,
+        "investigator_completed_at": fwd_date.isoformat() if fwd_date else None,
+        "date_assigned": date_assigned.isoformat() if date_assigned else None,
+        "forwarded_date": fwd_date.isoformat() if fwd_date else None,
+        "expert_review_status": exp_rev_st,
+        "expert_verified_at": c.expert_verified_at.isoformat() if c.expert_verified_at else None,
+        "closed_at": c.closed_at.isoformat() if c.closed_at else None,
+        "is_investigation_completed": bool(fwd_date is not None or c.status in [StatusEnum.FORWARDED_TO_EXPERT, StatusEnum.UNDER_EXPERT_REVIEW, StatusEnum.VERIFIED, StatusEnum.CLOSED]),
+        "assigned_expert": c.expert.full_name if c.expert else None,
+        "assigned_expert_id": c.assigned_expert,
+        "assigned_expert_name": c.expert.full_name if c.expert else None,
+        "assigned_investigator_id": c.assigned_investigator_id or (c.assigned_expert if c.status in [StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.CASE_OPENED] else None),
+        "assigned_investigator_name": c.assigned_investigator.full_name if c.assigned_investigator else (c.expert.full_name if c.expert else None),
+        "is_assigned_to_me": bool((c.assigned_investigator_id and c.assigned_investigator_id == user.id) or (c.assigned_expert and c.assigned_expert == user.id)),
         "created_by": c.created_by,
         "creator_name": c.creator.full_name if c.creator else None,
         "evidence": evidence_list,
@@ -919,8 +1105,10 @@ def update_case(
     if is_admin(user):
         pass
     elif is_investigator(user):
-        if c.assigned_expert != user.id:
+        if c.assigned_expert != user.id and c.assigned_investigator_id != user.id:
             raise HTTPException(status_code=403, detail="Forbidden: You cannot modify investigations assigned to another investigator.")
+        if c.forwarded_to_expert_at is not None or c.status in [StatusEnum.FORWARDED_TO_EXPERT, StatusEnum.UNDER_EXPERT_REVIEW, StatusEnum.VERIFIED, StatusEnum.CLOSED]:
+            raise HTTPException(status_code=403, detail="Forbidden: Completed investigations are locked and cannot be modified.")
         if title != c.title or description != c.description:
             raise HTTPException(status_code=403, detail="Forbidden: Investigators are not allowed to modify case details.")
         if incident_date and incident_date.strip():
@@ -951,9 +1139,14 @@ def update_case(
             if old_status != new_status:
                 valid_transitions = {
                     StatusEnum.DRAFT: [StatusEnum.CASE_FILED],
-                    StatusEnum.CASE_FILED: [StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.DRAFT],
-                    StatusEnum.CASE_UNDER_INVESTIGATION: [StatusEnum.CLOSED, StatusEnum.CASE_FILED],
-                    StatusEnum.CLOSED: [StatusEnum.CASE_UNDER_INVESTIGATION]
+                    StatusEnum.CASE_FILED: [StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.ASSIGNED, StatusEnum.DRAFT],
+                    StatusEnum.ASSIGNED: [StatusEnum.IN_PROGRESS, StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.CASE_FILED],
+                    StatusEnum.IN_PROGRESS: [StatusEnum.FORWARDED_TO_EXPERT, StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.CASE_FILED],
+                    StatusEnum.CASE_UNDER_INVESTIGATION: [StatusEnum.FORWARDED_TO_EXPERT, StatusEnum.IN_PROGRESS, StatusEnum.CLOSED, StatusEnum.CASE_FILED],
+                    StatusEnum.FORWARDED_TO_EXPERT: [StatusEnum.UNDER_EXPERT_REVIEW, StatusEnum.VERIFIED, StatusEnum.CASE_UNDER_INVESTIGATION],
+                    StatusEnum.UNDER_EXPERT_REVIEW: [StatusEnum.VERIFIED, StatusEnum.FORWARDED_TO_EXPERT],
+                    StatusEnum.VERIFIED: [StatusEnum.CLOSED, StatusEnum.UNDER_EXPERT_REVIEW],
+                    StatusEnum.CLOSED: [StatusEnum.CASE_UNDER_INVESTIGATION, StatusEnum.VERIFIED]
                 }
                 allowed = valid_transitions.get(old_status, [])
                 if new_status not in allowed:
@@ -1333,8 +1526,8 @@ def delete_evidence(
                 raise HTTPException(status_code=404, detail="Investigation case not found")
             if c.assigned_expert != user.id and c.assigned_investigator_id != user.id:
                 raise HTTPException(status_code=403, detail="Forbidden: You are not assigned to this case.")
-            if c.status == StatusEnum.CLOSED or (hasattr(c.status, "value") and c.status.value == "CLOSED"):
-                raise HTTPException(status_code=403, detail="Forbidden: Case is closed. Evidence cannot be deleted.")
+            if c.status in [StatusEnum.FORWARDED_TO_EXPERT, StatusEnum.UNDER_EXPERT_REVIEW, StatusEnum.VERIFIED, StatusEnum.CLOSED] or c.forwarded_to_expert_at is not None or (hasattr(c.status, "value") and c.status.value == "CLOSED"):
+                raise HTTPException(status_code=403, detail="Forbidden: Investigation is completed and locked. Evidence cannot be deleted.")
             # 2. Strict ownership rule: Investigator can ONLY delete evidence THEY uploaded
             if e.uploaded_by != user.id:
                 raise HTTPException(status_code=403, detail="Forbidden: Investigators are only permitted to delete evidence they uploaded.")
@@ -1667,11 +1860,26 @@ def add_forensic_review(
     case_id = analysis.evidence.case_id if analysis.evidence else None
     if case_id:
         c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
-        if c and c.status in [StatusEnum.CASE_FILED, StatusEnum.CASE_OPENED, StatusEnum.UNDER_ANALYSIS, StatusEnum.OPEN]:
-            c.status = StatusEnum.CASE_UNDER_INVESTIGATION
-            log_audit_event(db, case_id, user.id, "Status Changed to CASE_UNDER_INVESTIGATION", "Case status updated to CASE_UNDER_INVESTIGATION.")
+        if c:
+            if c.status in [StatusEnum.FORWARDED_TO_EXPERT, StatusEnum.UNDER_EXPERT_REVIEW]:
+                c.assigned_expert = user.id
+                if dec_enum == DecisionEnum.APPROVED:
+                    c.status = StatusEnum.VERIFIED
+                    c.expert_review_status = "VERIFIED"
+                    c.expert_verified_at = datetime.now(timezone.utc)
+                    log_audit_event(db, case_id, user.id, "Case Verified by Expert", f"Case verified by expert {user.full_name}.")
+                elif dec_enum == DecisionEnum.REJECTED:
+                    c.expert_review_status = "REJECTED"
+                    log_audit_event(db, case_id, user.id, "Expert Review Rejected", f"Verification rejected by expert {user.full_name}.")
+                else:
+                    c.status = StatusEnum.UNDER_EXPERT_REVIEW
+                    c.expert_review_status = "UNDER_REVIEW"
+                    log_audit_event(db, case_id, user.id, "Case Under Expert Review", f"Case marked under expert review by {user.full_name}.")
+            elif c.status in [StatusEnum.CASE_FILED, StatusEnum.CASE_OPENED, StatusEnum.UNDER_ANALYSIS, StatusEnum.OPEN]:
+                c.status = StatusEnum.CASE_UNDER_INVESTIGATION
+                log_audit_event(db, case_id, user.id, "Status Changed to CASE_UNDER_INVESTIGATION", "Case status updated to CASE_UNDER_INVESTIGATION.")
             
-        log_audit_event(db, case_id, user.id, "Expert Review Submitted", f"Expert review submitted with verdict '{dec_enum.value}' by {user.full_name}.")
+            log_audit_event(db, case_id, user.id, "Expert Review Submitted", f"Expert review submitted with verdict '{dec_enum.value}' by {user.full_name}.")
         
     db.commit()
     db.refresh(review)
@@ -2377,11 +2585,13 @@ def promote_attachment_to_evidence(
         raise HTTPException(status_code=404, detail="Case not found")
 
     # Controlled action: Lead Investigator or Admin
-    if not is_admin(user) and user.id != c.assigned_expert:
+    if not is_admin(user) and user.id != c.assigned_expert and user.id != c.assigned_investigator_id:
         raise HTTPException(
             status_code=403,
             detail="Access Denied: Only the assigned lead investigator or admin can promote attachments to formal evidence."
         )
+    if c.status in [StatusEnum.FORWARDED_TO_EXPERT, StatusEnum.UNDER_EXPERT_REVIEW, StatusEnum.VERIFIED, StatusEnum.CLOSED] or c.forwarded_to_expert_at is not None:
+        raise HTTPException(status_code=403, detail="Forbidden: Investigation is completed and locked.")
 
     att = db.query(MessageAttachment).filter(
         MessageAttachment.id == attachment_id,
@@ -2484,19 +2694,21 @@ def verify_case_access(c: InvestigationCase, user: User):
         return True
     if c.created_by == user.id:
         return True
-    if is_investigator(user) and c.assigned_expert == user.id:
+    if is_investigator(user) and (c.assigned_investigator_id == user.id or c.assigned_expert == user.id):
         return True
     raise HTTPException(status_code=403, detail="Forbidden: You are not assigned to this case.")
 
 def verify_evidence_upload_access(c: InvestigationCase, user: User):
     if is_admin(user):
         return True
+    if c.status in [StatusEnum.FORWARDED_TO_EXPERT, StatusEnum.UNDER_EXPERT_REVIEW, StatusEnum.VERIFIED, StatusEnum.CLOSED] or c.forwarded_to_expert_at is not None:
+        raise HTTPException(status_code=403, detail="Forbidden: Investigation is completed and locked. Additional evidence cannot be uploaded.")
     if c.created_by == user.id:
         return True
     if is_investigator(user):
-        if c.assigned_expert == user.id:
+        if c.assigned_investigator_id == user.id or c.assigned_expert == user.id:
             return True
-        elif c.assigned_expert is None:
+        elif c.assigned_expert is None and c.assigned_investigator_id is None:
             raise HTTPException(status_code=403, detail="Forbidden: You must claim this case before uploading evidence.")
         else:
             raise HTTPException(status_code=403, detail="Forbidden: This case is assigned to another investigator.")
@@ -2516,6 +2728,9 @@ def analyze_investigation_endpoint(
         raise HTTPException(status_code=404, detail="Investigation case not found")
 
     verify_case_access(c, user)
+    if is_investigator(user) and not is_admin(user):
+        if c.status in [StatusEnum.FORWARDED_TO_EXPERT, StatusEnum.UNDER_EXPERT_REVIEW, StatusEnum.VERIFIED, StatusEnum.CLOSED] or c.forwarded_to_expert_at is not None:
+            raise HTTPException(status_code=403, detail="Forbidden: Investigation is completed and locked. Additional analysis cannot be run.")
 
     evidence_files = db.query(EvidenceFile).filter(EvidenceFile.case_id == case_id).all()
     if not evidence_files:
@@ -2564,6 +2779,9 @@ def trigger_forensic_scan(
         raise HTTPException(status_code=404, detail="Case not found")
 
     verify_case_access(c, user)
+    if is_investigator(user) and not is_admin(user):
+        if c.status in [StatusEnum.FORWARDED_TO_EXPERT, StatusEnum.UNDER_EXPERT_REVIEW, StatusEnum.VERIFIED, StatusEnum.CLOSED] or c.forwarded_to_expert_at is not None:
+            raise HTTPException(status_code=403, detail="Forbidden: Investigation is completed and locked. Additional scans cannot be run.")
 
     evidence_files = db.query(EvidenceFile).filter(EvidenceFile.case_id == case_id).all()
     if not evidence_files:
@@ -2990,3 +3208,331 @@ def delete_investigator_note(
 
     return {"message": "Investigation note deleted successfully."}
 
+
+# ─── 11. Case Lifecycle: Forward to Expert, Expert Verification, Final Closure ───
+
+@router.post("/cases/{case_id}/forward-to-expert")
+@router.post("/cases/{case_id}/forward")
+def forward_case_to_expert(
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    if not is_investigator_or_admin(user):
+        raise HTTPException(status_code=403, detail="Only investigators or administrators can forward cases to the Expert module.")
+
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).with_for_update().first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    # Verify authorization: must be assigned to case or admin
+    if not is_admin(user):
+        if c.assigned_investigator_id != user.id and c.assigned_expert != user.id:
+            raise HTTPException(status_code=403, detail="You are not authorized to forward a case assigned to another investigator.")
+
+    if c.status in [StatusEnum.FORWARDED_TO_EXPERT, StatusEnum.UNDER_EXPERT_REVIEW, StatusEnum.VERIFIED, StatusEnum.CLOSED] or c.forwarded_to_expert_at is not None:
+        raise HTTPException(status_code=400, detail="This case has already been forwarded to the Expert module or completed.")
+
+    # 1. Validate that required investigation steps are complete.
+    if not c.evidence_files or len(c.evidence_files) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot forward case to Expert: At least one evidence file must be uploaded before forwarding."
+        )
+
+    has_analysis = any(len(ev.analyses) > 0 for ev in c.evidence_files)
+    has_scan = db.query(ForensicScan).filter(ForensicScan.case_id == c.id).first() is not None
+    has_investigator_notes = db.query(InvestigatorNote).filter(InvestigatorNote.case_id == c.id).first() is not None
+    # Also check case notes entered by the investigator
+    has_inv_case_notes = any(n.user_id == user.id for n in (c.notes or []))
+
+    if not (has_analysis or has_scan or has_investigator_notes or has_inv_case_notes):
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot forward case to Expert: Forensic analysis or investigator notes must be completed before forwarding."
+        )
+
+    # 2. Mark the investigator's work as completed.
+    # 3. Set the appropriate case status: FORWARDED_TO_EXPERT.
+    c.status = StatusEnum.FORWARDED_TO_EXPERT
+
+    # 4. Record investigator completion / forwarded timestamp.
+    now = datetime.now(timezone.utc)
+    c.forwarded_to_expert_at = now
+    c.investigator_completed_at = now
+    c.expert_review_status = "PENDING"
+
+    # 5. Preserve the investigator who completed the case.
+    if not c.assigned_investigator_id:
+        c.assigned_investigator_id = user.id
+
+    # 6. Make the case available to the Expert module.
+    if c.assigned_expert == c.assigned_investigator_id:
+        c.assigned_expert = None
+
+    db.commit()
+    db.refresh(c)
+
+    # 9. Add an audit/activity-log entry.
+    log_audit_event(
+        db,
+        c.id,
+        user.id,
+        "Forwarded to Expert",
+        f"Investigator {user.full_name} completed the investigation and forwarded case {c.case_number} to the Expert module for review."
+    )
+
+    if c.created_by:
+        add_user_notification(
+            db,
+            c.created_by,
+            "Investigation Completed",
+            f"Case {c.case_number} investigation has been completed and forwarded to the Expert module for verification."
+        )
+
+    return {
+        "message": "Investigation completed and case successfully forwarded to Expert module.",
+        "case_id": c.id,
+        "case_number": c.case_number,
+        "status": c.status.value,
+        "forwarded_to_expert_at": c.forwarded_to_expert_at.isoformat(),
+        "investigator_completed_at": c.investigator_completed_at.isoformat(),
+        "assigned_investigator_id": c.assigned_investigator_id,
+        "assigned_investigator_name": user.full_name,
+        "expert_review_status": c.expert_review_status
+    }
+
+@router.post("/cases/{case_id}/verify")
+def verify_case_expert(
+    case_id: int,
+    decision: str = Form("APPROVED"),
+    observations: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    if not is_investigator_or_admin(user):
+        raise HTTPException(status_code=403, detail="Only experts or administrators can verify cases.")
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+    if c.status not in [StatusEnum.FORWARDED_TO_EXPERT, StatusEnum.UNDER_EXPERT_REVIEW]:
+        raise HTTPException(status_code=400, detail=f"Case cannot be verified from status {c.status.value}. Must be in expert review stage.")
+
+    dec_val = decision.upper().strip()
+    c.assigned_expert = user.id
+    now = datetime.now(timezone.utc)
+    if dec_val in ["APPROVED", "VERIFIED"]:
+        c.status = StatusEnum.VERIFIED
+        c.expert_review_status = "VERIFIED"
+        c.expert_verified_at = now
+        log_audit_event(db, c.id, user.id, "Case Verified by Expert", f"Expert {user.full_name} completed verification: Case marked as VERIFIED. Observations: {observations or 'None'}")
+    elif dec_val == "REJECTED":
+        c.expert_review_status = "REJECTED"
+        log_audit_event(db, c.id, user.id, "Expert Review Rejected", f"Expert {user.full_name} rejected verification. Observations: {observations or 'None'}")
+    else:
+        c.status = StatusEnum.UNDER_EXPERT_REVIEW
+        c.expert_review_status = "UNDER_REVIEW"
+        log_audit_event(db, c.id, user.id, "Under Expert Review", f"Case under review by expert {user.full_name}. Observations: {observations or 'None'}")
+
+    db.commit()
+    db.refresh(c)
+    return {
+        "message": f"Expert review decision '{dec_val}' recorded successfully.",
+        "case_id": c.id,
+        "status": c.status.value,
+        "expert_review_status": c.expert_review_status,
+        "expert_verified_at": c.expert_verified_at.isoformat() if c.expert_verified_at else None
+    }
+
+@router.post("/cases/{case_id}/close")
+def close_case_endpoint(
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    if not is_admin(user):
+        raise HTTPException(status_code=403, detail="Only administrators can permanently close the case lifecycle.")
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+    c.status = StatusEnum.CLOSED
+    c.closed_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(c)
+    log_audit_event(db, c.id, user.id, "Case Closed", f"Final case closure by administrator {user.full_name}.")
+    return {
+        "message": "Case closed successfully",
+        "case_id": c.id,
+        "status": c.status.value,
+        "closed_at": c.closed_at.isoformat()
+    }
+
+
+# ─── Investigation Documents Endpoints ───
+
+ALLOWED_INVESTIGATION_DOC_TYPES = {
+    "application/pdf": ".pdf",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "text/plain": ".txt",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "text/csv": ".csv",
+    "image/jpeg": ".jpg",
+    "image/png": ".png"
+}
+
+@router.post("/cases/{case_id}/investigation-documents")
+async def upload_investigation_document(
+    case_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    if not is_investigator_or_admin(user):
+        raise HTTPException(status_code=403, detail="Only investigators can upload investigation documents.")
+        
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+        
+    if c.assigned_investigator_id != user.id and c.assigned_expert != user.id and not is_admin(user):
+        raise HTTPException(status_code=403, detail="You are not assigned to this case.")
+        
+    if c.status != StatusEnum.CASE_UNDER_INVESTIGATION and not is_admin(user):
+        raise HTTPException(status_code=403, detail="Cannot upload documents unless case is under investigation.")
+        
+    if file.content_type not in ALLOWED_INVESTIGATION_DOC_TYPES:
+        raise HTTPException(status_code=400, detail="Unsupported file type.")
+        
+    ext = ALLOWED_INVESTIGATION_DOC_TYPES[file.content_type]
+    file_id = str(uuid.uuid4())
+    stored_filename = f"inv_doc_{case_id}_{file_id}{ext}"
+    stored_path = os.path.join(UPLOAD_DIR, "investigation_documents", stored_filename)
+    os.makedirs(os.path.dirname(stored_path), exist_ok=True)
+    
+    file_size = 0
+    sha256 = hashlib.sha256()
+    
+    with open(stored_path, "wb") as buffer:
+        while True:
+            chunk = await file.read(8192)
+            if not chunk:
+                break
+            buffer.write(chunk)
+            sha256.update(chunk)
+            file_size += len(chunk)
+            
+    if file_size == 0:
+        os.remove(stored_path)
+        raise HTTPException(status_code=400, detail="Empty file uploaded.")
+        
+    doc = InvestigationDocument(
+        case_id=case_id,
+        investigator_id=user.id,
+        original_filename=file.filename or stored_filename,
+        stored_path=stored_path,
+        mime_type=file.content_type,
+        file_size=file_size,
+        sha256_hash=sha256.hexdigest()
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    
+    log_audit_event(db, case_id, user.id, "Investigation document uploaded", f"Uploaded document: {doc.original_filename}")
+    
+    return {
+        "id": doc.id,
+        "original_filename": doc.original_filename,
+        "mime_type": doc.mime_type,
+        "file_size": doc.file_size,
+        "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
+        "investigator_id": doc.investigator_id,
+        "investigator_name": user.full_name
+    }
+
+@router.get("/cases/{case_id}/investigation-documents")
+def get_investigation_documents(
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+        
+    docs = db.query(InvestigationDocument).filter(InvestigationDocument.case_id == case_id).order_by(InvestigationDocument.uploaded_at.desc()).all()
+    
+    result = []
+    for d in docs:
+        result.append({
+            "id": d.id,
+            "original_filename": d.original_filename,
+            "mime_type": d.mime_type,
+            "file_size": d.file_size,
+            "uploaded_at": d.uploaded_at.isoformat() if d.uploaded_at else None,
+            "investigator_id": d.investigator_id,
+            "investigator_name": d.investigator.full_name if d.investigator else "Unknown"
+        })
+    return result
+
+@router.get("/cases/{case_id}/investigation-documents/{doc_id}/download")
+def download_investigation_document(
+    case_id: int,
+    doc_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    doc = db.query(InvestigationDocument).filter(
+        InvestigationDocument.id == doc_id,
+        InvestigationDocument.case_id == case_id
+    ).first()
+    
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+        
+    if not os.path.exists(doc.stored_path):
+        raise HTTPException(status_code=404, detail="File not found on server")
+        
+    return FileResponse(
+        path=doc.stored_path,
+        filename=doc.original_filename,
+        media_type=doc.mime_type
+    )
+
+@router.delete("/cases/{case_id}/investigation-documents/{doc_id}")
+def delete_investigation_document(
+    case_id: int,
+    doc_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    doc = db.query(InvestigationDocument).filter(
+        InvestigationDocument.id == doc_id,
+        InvestigationDocument.case_id == case_id
+    ).first()
+    
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+        
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    
+    if doc.investigator_id != user.id and not is_admin(user):
+        raise HTTPException(status_code=403, detail="You can only delete your own documents.")
+        
+    if c.status != StatusEnum.CASE_UNDER_INVESTIGATION and not is_admin(user):
+        raise HTTPException(status_code=403, detail="Cannot delete documents once case investigation is complete.")
+        
+    try:
+        if os.path.exists(doc.stored_path):
+            os.remove(doc.stored_path)
+    except Exception as e:
+        print("Error removing file:", e)
+        
+    db.delete(doc)
+    db.commit()
+    
+    log_audit_event(db, case_id, user.id, "Investigation document deleted", f"Deleted document: {doc.original_filename}")
+    
+    return {"message": "Document deleted successfully"}

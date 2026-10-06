@@ -161,9 +161,11 @@ export default function InvestigatorCaseWorkspacePage() {
   const userRoleId = (session?.user as any)?.role_id || (session?.user as any)?.role;
 
   const assignedInvestigatorId =
-    caseDetail?.assigned_expert_id !== undefined && caseDetail?.assigned_expert_id !== null
-      ? Number(caseDetail.assigned_expert_id)
-      : (typeof caseDetail?.assigned_expert === "number" ? caseDetail.assigned_expert : null);
+    caseDetail?.assigned_investigator_id !== undefined && caseDetail?.assigned_investigator_id !== null
+      ? Number(caseDetail.assigned_investigator_id)
+      : (caseDetail?.assigned_expert_id !== undefined && caseDetail?.assigned_expert_id !== null
+        ? Number(caseDetail.assigned_expert_id)
+        : (typeof caseDetail?.assigned_expert === "number" ? caseDetail.assigned_expert : null));
 
   const isCaseOwner = currentUserId !== null && Number(caseDetail?.created_by) === currentUserId;
   const isClaimedInvestigator = currentUserId !== null && isInvestigator && assignedInvestigatorId === currentUserId;
@@ -171,12 +173,21 @@ export default function InvestigatorCaseWorkspacePage() {
   const isOtherInvestigator = isInvestigator && Boolean(assignedInvestigatorId) && assignedInvestigatorId !== currentUserId && !isCaseOwner;
   const isAdminUser = userRoleId === 1 || userRoleId === "ADMIN";
 
+  const isInvestigationCompleted =
+    Boolean(caseDetail?.investigator_completed_at) ||
+    Boolean(caseDetail?.forwarded_to_expert_at) ||
+    caseDetail?.status === "FORWARDED_TO_EXPERT" ||
+    caseDetail?.status === "UNDER_EXPERT_REVIEW" ||
+    caseDetail?.status === "VERIFIED" ||
+    caseDetail?.status === "CLOSED";
+
   const [deleteConfirmEvidence, setDeleteConfirmEvidence] = useState<EvidenceType | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  const canUploadEvidence = isCaseOwner || isClaimedInvestigator || isAdminUser;
+  const canUploadEvidence = (isCaseOwner || isClaimedInvestigator || isAdminUser) && (!isInvestigator || !isInvestigationCompleted) && caseDetail?.status !== "CLOSED";
 
   const canDeleteEvidence = (ev: EvidenceType) => {
+    if (isInvestigator && isInvestigationCompleted) return false;
     if (isAdminUser) return true;
     if (isInvestigator) {
       return ev.uploaded_by !== undefined && Number(ev.uploaded_by) === currentUserId;
@@ -331,17 +342,51 @@ export default function InvestigatorCaseWorkspacePage() {
         </span>
       );
     }
+    if (normalized === "ASSIGNED") {
+      return (
+        <span className="inline-flex items-center justify-center px-2.5 py-1 rounded text-xs font-bold bg-purple-50 text-purple-800 border border-purple-200 whitespace-nowrap">
+          Assigned
+        </span>
+      );
+    }
+    if (normalized === "IN_PROGRESS") {
+      return (
+        <span className="inline-flex items-center justify-center px-2.5 py-1 rounded text-xs font-bold bg-purple-50 text-purple-800 border border-purple-200 whitespace-nowrap">
+          In Progress
+        </span>
+      );
+    }
     if (
       normalized === "CASE_UNDER_INVESTIGATION" ||
       normalized === "UNDER_INVESTIGATION" ||
       normalized === "CASE_OPENED" ||
       normalized === "UNDER_ANALYSIS" ||
-      normalized === "EXPERT_REVIEW" ||
       normalized === "REVIEW"
     ) {
       return (
         <span className="inline-flex items-center justify-center px-2.5 py-1 rounded text-xs font-bold bg-purple-50 text-purple-800 border border-purple-200 whitespace-nowrap">
           Under Investigation
+        </span>
+      );
+    }
+    if (normalized === "FORWARDED_TO_EXPERT" || normalized === "FORWARDED") {
+      return (
+        <span className="inline-flex items-center justify-center px-2.5 py-1 rounded text-xs font-bold bg-indigo-50 text-indigo-800 border border-indigo-200 whitespace-nowrap">
+          Forwarded to Expert
+        </span>
+      );
+    }
+    if (normalized === "UNDER_EXPERT_REVIEW" || normalized === "EXPERT_REVIEW") {
+      return (
+        <span className="inline-flex items-center justify-center px-2.5 py-1 rounded text-xs font-bold bg-blue-50 text-blue-800 border border-blue-200 whitespace-nowrap">
+          Under Expert Review
+        </span>
+      );
+    }
+    if (normalized === "VERIFIED" || normalized === "EXPERT_VERIFIED") {
+      return (
+        <span className="inline-flex items-center justify-center px-2.5 py-1 rounded text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 whitespace-nowrap">
+          Verified
         </span>
       );
     }
@@ -373,6 +418,40 @@ export default function InvestigatorCaseWorkspacePage() {
     return (
       <span className="inline-flex items-center justify-center px-2.5 py-1 rounded text-xs font-bold bg-purple-50 text-purple-800 border border-purple-200 whitespace-nowrap">
         {displayLabel}
+      </span>
+    );
+  };
+
+  const renderExpertReviewBadge = (statusStr: string | null | undefined) => {
+    const raw = (statusStr || "UNDER_REVIEW").toUpperCase().replace(/\s+/g, "_");
+    if (raw === "VERIFIED" || raw === "APPROVED") {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-300 whitespace-nowrap">
+          <CheckCircle className="h-3.5 w-3.5 text-emerald-600" />
+          Verified
+        </span>
+      );
+    }
+    if (raw === "REJECTED") {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-800 border border-rose-300 whitespace-nowrap">
+          <X className="h-3.5 w-3.5 text-rose-600" />
+          Rejected
+        </span>
+      );
+    }
+    if (raw === "NOT_SUBMITTED") {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200 whitespace-nowrap">
+          <Clock className="h-3.5 w-3.5 text-slate-500" />
+          Investigation In Progress
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-50 text-indigo-800 border border-indigo-300 whitespace-nowrap">
+        <Clock className="h-3.5 w-3.5 text-indigo-600" />
+        Under Expert Review
       </span>
     );
   };
@@ -702,8 +781,39 @@ export default function InvestigatorCaseWorkspacePage() {
     }
   };
 
+  const [isForwardConfirmModalOpen, setIsForwardConfirmModalOpen] = useState(false);
+  const [forwardingInProgress, setForwardingInProgress] = useState(false);
+
   const handleForwardToExpert = () => {
-    showToast("Expert review workflow will be available soon.", "info");
+    if (!caseDetail?.evidence || caseDetail.evidence.length === 0) {
+      showToast("Cannot forward: At least one evidence file is required before submitting for expert review.", "error");
+      return;
+    }
+    setIsForwardConfirmModalOpen(true);
+  };
+
+  const handleConfirmForwardToExpert = async () => {
+    if (!caseId || !session?.accessToken || forwardingInProgress) return;
+    setForwardingInProgress(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/cases/${caseId}/forward-to-expert`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${session.accessToken}` }
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        showToast("Investigation marked as completed and case forwarded to Expert module!", "success");
+        setIsForwardConfirmModalOpen(false);
+        fetchCaseDetail();
+      } else {
+        const detailStr = typeof data.detail === "string" ? data.detail : (data.detail?.message || "Failed to forward case to expert.");
+        showToast(detailStr, "error");
+      }
+    } catch (err) {
+      showToast("An error occurred while forwarding case to expert.", "error");
+    } finally {
+      setForwardingInProgress(false);
+    }
   };
 
   if (loading) {
@@ -851,7 +961,7 @@ export default function InvestigatorCaseWorkspacePage() {
           <p className="text-sm text-[#0a0a0a]/75 leading-relaxed">{caseDetail.description || "No case description provided."}</p>
 
           {/* ─── Case Overview Grid (Requirement 4) ─── */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 pt-4 border-t border-[#e5e5e5] text-xs">
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-3 pt-4 border-t border-[#e5e5e5] text-xs">
             <div className="bg-slate-50/70 p-3 rounded-lg border border-[#e5e5e5]">
               <span className="block text-[10px] text-slate-400 uppercase font-bold mb-0.5">Case Owner</span>
               <span className="text-slate-900 font-bold truncate block">{caseDetail.creator_name || "Citizen Reporter"}</span>
@@ -859,12 +969,21 @@ export default function InvestigatorCaseWorkspacePage() {
             
             <div className="bg-slate-50/70 p-3 rounded-lg border border-[#e5e5e5]">
               <span className="block text-[10px] text-slate-400 uppercase font-bold mb-0.5">Assigned Investigator</span>
-              <span className="text-slate-900 font-bold truncate block">{caseDetail.assigned_expert_name || "Awaiting Assignment"}</span>
+              <span className="text-slate-900 font-bold truncate block">{caseDetail.assigned_investigator_name || caseDetail.assigned_expert_name || "Awaiting Assignment"}</span>
             </div>
 
             <div className="bg-slate-50/70 p-3 rounded-lg border border-[#e5e5e5]">
-              <span className="block text-[10px] text-slate-400 uppercase font-bold mb-0.5">Incident Date</span>
-              <span className="text-slate-900 font-bold block">{formatDate(caseDetail.incident_date)}</span>
+              <span className="block text-[10px] text-slate-400 uppercase font-bold mb-0.5">Investigation Started</span>
+              <span className="text-slate-900 font-bold block">{formatDate(caseDetail.date_assigned || caseDetail.opened_at || caseDetail.created_at)}</span>
+            </div>
+
+            <div className="bg-slate-50/70 p-3 rounded-lg border border-[#e5e5e5]">
+              <span className="block text-[10px] text-slate-400 uppercase font-bold mb-0.5">Forwarded to Expert</span>
+              <span className="text-indigo-700 font-bold block">
+                {caseDetail.forwarded_to_expert_at || caseDetail.investigator_completed_at
+                  ? formatDate(caseDetail.forwarded_to_expert_at || caseDetail.investigator_completed_at)
+                  : "Pending Completion"}
+              </span>
             </div>
 
             <div className="bg-slate-50/70 p-3 rounded-lg border border-[#e5e5e5]">
@@ -878,11 +997,60 @@ export default function InvestigatorCaseWorkspacePage() {
             </div>
 
             <div className="bg-slate-50/70 p-3 rounded-lg border border-[#e5e5e5]">
-              <span className="block text-[10px] text-slate-400 uppercase font-bold mb-0.5">Status</span>
-              <span className="text-slate-900 font-bold block">{renderStatusBadge(caseDetail.status)}</span>
+              <span className="block text-[10px] text-slate-400 uppercase font-bold mb-0.5">Current Status</span>
+              <div className="pt-0.5">{renderStatusBadge(caseDetail.status)}</div>
+            </div>
+
+            <div className="bg-slate-50/70 p-3 rounded-lg border border-[#e5e5e5]">
+              <span className="block text-[10px] text-slate-400 uppercase font-bold mb-0.5">Expert Review Status</span>
+              <div className="pt-0.5">
+                {renderExpertReviewBadge(
+                  caseDetail.expert_review_status ||
+                  (caseDetail.status === "VERIFIED" ? "VERIFIED" : (isInvestigationCompleted ? "UNDER_EXPERT_REVIEW" : "NOT_SUBMITTED"))
+                )}
+              </div>
             </div>
           </div>
         </div>
+
+        {/* ─── Completed Case Banner (Read-Only Notification) ─── */}
+        {isInvestigationCompleted && (
+          <div className="bg-slate-50 border border-[#e5e5e5] rounded-xl p-5 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-left animate-fade-in">
+            <div className="flex items-start gap-3.5">
+              <div className="w-10 h-10 rounded-xl bg-slate-100 border border-[#e5e5e5] flex items-center justify-center text-[#0a0a0a] flex-shrink-0 mt-0.5">
+                <CheckCircle className="h-6 w-6 text-[#0a0a0a]" />
+              </div>
+              <div className="space-y-0.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-[#0a0a0a]">
+                    Investigation Completed & Forwarded to Expert
+                  </span>
+                  {caseDetail.forwarded_to_expert_at && (
+                    <span className="text-[11px] font-semibold text-[#0a0a0a]/60">
+                      • Forwarded on {formatDate(caseDetail.forwarded_to_expert_at)}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-[#0a0a0a]/80 leading-relaxed font-medium">
+                  Your portion of this investigation is completed and forwarded to the Expert module for review and verification. All case records are now preserved in read-only mode.
+                </p>
+                <div className="flex flex-wrap items-center gap-3 pt-1 text-[11px] text-[#0a0a0a] font-semibold">
+                  <span>Investigator: <strong>{caseDetail.assigned_investigator_name || caseDetail.assigned_expert_name || "Investigator"}</strong></span>
+                  <span>•</span>
+                  <span>Expert Review: <strong className="text-[#0a0a0a]">{caseDetail.expert_review_status || (caseDetail.status === "VERIFIED" ? "Verified" : "Under Expert Review")}</strong></span>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0a0a0a] text-white text-xs font-bold shadow-xs">
+                <Lock className="h-3.5 w-3.5" />
+                Read-Only
+              </span>
+            </div>
+          </div>
+        )}
+
+
 
         {/* Two-Column Case Content Workspace Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 text-left">
@@ -910,6 +1078,11 @@ export default function InvestigatorCaseWorkspacePage() {
                       <Plus className="h-3.5 w-3.5" />
                       {isClaimedInvestigator ? "Add Investigation Evidence" : "Upload Evidence"}
                     </button>
+                  ) : isInvestigationCompleted ? (
+                    <div className="flex items-center gap-1.5 px-3 py-1 bg-slate-100 border border-slate-200 text-slate-700 rounded text-[11px] font-semibold">
+                      <Lock className="h-3.5 w-3.5 text-slate-500" />
+                      <span>Investigation Completed (Read-Only)</span>
+                    </div>
                   ) : isOtherInvestigator ? (
                     <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-50 border border-amber-200 text-amber-800 rounded text-[11px] font-semibold">
                       <Lock className="h-3.5 w-3.5 text-amber-600" />
@@ -1251,13 +1424,19 @@ export default function InvestigatorCaseWorkspacePage() {
                       </p>
                     </div>
 
-                    <button
-                      onClick={handleScanEvidence}
-                      className="inline-flex items-center gap-2 px-6 py-2.5 rounded-lg bg-[#CC2200] hover:bg-[#a81c00] text-white text-xs font-bold shadow-md transition-all cursor-pointer"
-                    >
-                      <Sparkles className="h-4 w-4" />
-                      Scan Evidence
-                    </button>
+                    {!isInvestigationCompleted ? (
+                      <button
+                        onClick={handleScanEvidence}
+                        className="inline-flex items-center gap-2 px-6 py-2.5 rounded-lg bg-[#CC2200] hover:bg-[#a81c00] text-white text-xs font-bold shadow-md transition-all cursor-pointer"
+                      >
+                        <Sparkles className="h-4 w-4" />
+                        Scan Evidence
+                      </button>
+                    ) : (
+                      <div className="text-xs text-slate-500 font-semibold italic">
+                        Investigation completed. Forensic scans are locked.
+                      </div>
+                    )}
                   </div>
                 )}
                 </div>
@@ -1302,8 +1481,8 @@ export default function InvestigatorCaseWorkspacePage() {
             <InvestigatorNotesEditor
               caseId={caseDetail.id}
               accessToken={session?.accessToken || ""}
-              assignedExpertId={caseDetail.assigned_expert_id ?? caseDetail.assigned_expert}
-              caseStatus={caseDetail.status}
+              assignedExpertId={caseDetail.assigned_investigator_id ?? caseDetail.assigned_expert_id ?? caseDetail.assigned_expert}
+              caseStatus={isInvestigationCompleted ? "FORWARDED_TO_EXPERT" : caseDetail.status}
               currentUserId={session?.user?.id}
               isInvestigatorRole={isInvestigator}
               userFullName={session?.user?.name || "Investigator"}
@@ -1316,23 +1495,38 @@ export default function InvestigatorCaseWorkspacePage() {
         <div className="mt-12 pt-8 border-t border-[#e5e5e5]">
           <div className="bg-white border border-[#e5e5e5] rounded-xl p-6 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6 text-left">
             <div className="flex items-start gap-4">
-              <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 flex-shrink-0 mt-0.5">
-                <Send className="h-5 w-5" />
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5 ${
+                isInvestigationCompleted
+                  ? "bg-emerald-50 border border-emerald-100 text-emerald-600"
+                  : "bg-indigo-50 border border-indigo-100 text-indigo-600"
+              }`}>
+                {isInvestigationCompleted ? <CheckCircle className="h-5 w-5" /> : <Send className="h-5 w-5" />}
               </div>
               <div className="space-y-1">
-                <span className="text-[10px] font-extrabold uppercase tracking-widest text-indigo-600 block">
-                  Final Investigation Step
+                <span className={`text-[10px] font-extrabold uppercase tracking-widest block ${
+                  isInvestigationCompleted ? "text-emerald-700" : "text-indigo-600"
+                }`}>
+                  {isInvestigationCompleted ? "Investigation Completed" : "Final Investigation Step"}
                 </span>
                 <h3 className="text-sm font-bold text-slate-900">
-                  Forward Case File to Subject Matter Expert
+                  {isInvestigationCompleted
+                    ? "Case File Forwarded to Subject Matter Expert"
+                    : "Forward Case File to Subject Matter Expert"}
                 </h3>
                 <p className="text-xs text-slate-500 max-w-2xl leading-relaxed">
-                  After thoroughly reviewing submitted evidence, AI forensic scan metrics, case notes, and audit logs, submit this case file for secondary expert verification and formal forensic endorsement.
+                  {isInvestigationCompleted
+                    ? `Your investigation was completed and forwarded for expert review${caseDetail.forwarded_to_expert_at ? ` on ${formatDate(caseDetail.forwarded_to_expert_at)}` : ""}. This case is currently awaiting Subject Matter Expert verification.`
+                    : "After thoroughly reviewing submitted evidence, AI forensic scan metrics, case notes, and audit logs, submit this case file for secondary expert verification and formal forensic endorsement."}
                 </p>
               </div>
             </div>
 
-            {caseDetail.status === "CASE_UNDER_INVESTIGATION" && (
+            {isInvestigationCompleted ? (
+              <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex-shrink-0">
+                <CheckCircle className="h-4 w-4 text-emerald-600" />
+                <span>Forwarded to Expert</span>
+              </div>
+            ) : (caseDetail.status === "CASE_UNDER_INVESTIGATION" || caseDetail.status === "ASSIGNED" || caseDetail.status === "IN_PROGRESS") && isClaimedInvestigator ? (
               <button
                 onClick={handleForwardToExpert}
                 className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-md transition-colors cursor-pointer flex-shrink-0"
@@ -1340,7 +1534,7 @@ export default function InvestigatorCaseWorkspacePage() {
                 <Send className="h-4 w-4" />
                 Forward to Expert
               </button>
-            )}
+            ) : null}
           </div>
         </div>
 
@@ -1786,6 +1980,57 @@ export default function InvestigatorCaseWorkspacePage() {
                     Delete Evidence
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Forward to Expert Confirmation Modal ─── */}
+      {isForwardConfirmModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in text-left">
+          <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-2xl border border-[#e5e5e5] space-y-4 animate-scale-up">
+            <div className="flex items-center gap-3 text-indigo-600">
+              <div className="p-2 bg-indigo-50 rounded-full">
+                <Send className="h-6 w-6 text-indigo-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-lg text-[#0a0a0a]">Forward Case to Expert</h3>
+                {caseDetail?.case_number && (
+                  <p className="text-xs text-[#0a0a0a]/50">Case #{caseDetail.case_number}</p>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-3 text-xs text-[#0a0a0a]/80 bg-slate-50 p-4 rounded-lg border border-[#e5e5e5]">
+              <p className="font-semibold text-sm text-[#0a0a0a]">
+                Are you ready to complete your investigation and submit this case file?
+              </p>
+              <ul className="space-y-1.5 list-disc pl-5 text-[#0a0a0a]/75 leading-relaxed">
+                <li>Your investigation portion will be marked as <strong className="text-slate-900">Completed</strong>.</li>
+                <li>The case will move to your <strong className="text-slate-900">Completed Cases</strong> tab.</li>
+                <li>The case file will become available to the <strong className="text-indigo-700">Expert Module</strong> for verification.</li>
+                <li>Modifications to this investigation will become locked (read-only).</li>
+              </ul>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#e5e5e5]">
+              <button
+                type="button"
+                onClick={() => setIsForwardConfirmModalOpen(false)}
+                disabled={forwardingInProgress}
+                className="px-4 py-2 border border-[#e5e5e5] rounded-md text-xs font-bold text-[#0a0a0a]/70 hover:bg-slate-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmForwardToExpert}
+                disabled={forwardingInProgress}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md text-xs font-bold transition-colors shadow-xs"
+              >
+                {forwardingInProgress ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                {forwardingInProgress ? "Forwarding..." : "Confirm & Forward to Expert"}
               </button>
             </div>
           </div>

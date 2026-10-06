@@ -67,10 +67,21 @@ interface CaseType {
   title: string;
   description: string;
   status: string;
+  category?: string;
   incident_date: string | null;
   created_at: string | null;
   submitted_at?: string | null;
   opened_at?: string | null;
+  forwarded_to_expert_at?: string | null;
+  investigator_completed_at?: string | null;
+  date_assigned?: string | null;
+  forwarded_date?: string | null;
+  expert_review_status?: string | null;
+  expert_verified_at?: string | null;
+  closed_at?: string | null;
+  is_investigation_completed?: boolean;
+  assigned_investigator_id?: number | null;
+  assigned_investigator_name?: string | null;
   assigned_expert?: string | null;
   assigned_expert_id?: number | null;
   assigned_expert_name?: string | null;
@@ -205,7 +216,7 @@ function UserDashboardContent() {
 
   // Sidebar navigation and UI states
   const [activeTab, setActiveTab] = useState<
-    "Dashboard" | "My Cases" | "All Cases" | "Assigned Cases" | "Open Cases" | "Upload Evidence" | "Evidence Library" | "AI Analysis" | "Case Notes" | "Reports" | "Profile" | "Settings"
+    "Dashboard" | "My Cases" | "All Cases" | "Assigned Cases" | "Completed Cases" | "Open Cases" | "Upload Evidence" | "Evidence Library" | "AI Analysis" | "Case Notes" | "Reports" | "Profile" | "Settings"
   >("Dashboard");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastType[]>([]);
@@ -224,6 +235,8 @@ function UserDashboardContent() {
   const [stats, setStats] = useState({
     availableCases: 0,
     assignedCases: 0,
+    inProgressCases: 0,
+    completedCases: 0,
     totalCases: 0,
     openCases: 0,
     underAnalysis: 0,
@@ -606,6 +619,8 @@ function UserDashboardContent() {
         setStats({
           availableCases: data.availableCases || 0,
           assignedCases: data.assignedCases || 0,
+          inProgressCases: data.inProgressCases !== undefined ? data.inProgressCases : (data.inProgress || 0),
+          completedCases: data.completedCases || 0,
           totalCases: data.totalCases,
           openCases: data.openCases,
           underAnalysis: data.underAnalysis,
@@ -809,6 +824,53 @@ function UserDashboardContent() {
       fetchAllCases();
     }
   }, [activeTab, selectedCaseId, fetchAllCases]);
+
+  // ─── Completed Cases Fetching (Investigator) ───
+  const [completedCases, setCompletedCases] = useState<CaseType[]>([]);
+  const [completedTotal, setCompletedTotal] = useState(0);
+  const [completedLoading, setCompletedLoading] = useState(true);
+  const [completedError, setCompletedError] = useState<string | null>(null);
+  const [completedPage, setCompletedPage] = useState(1);
+  const [completedSearch, setCompletedSearch] = useState("");
+  const [completedStatusFilter, setCompletedStatusFilter] = useState("");
+  const [completedSortBy, setCompletedSortBy] = useState("newest");
+
+  const fetchCompletedCases = useCallback(async () => {
+    if (!session?.accessToken) return;
+    try {
+      setCompletedLoading(true);
+      setCompletedError(null);
+      const queryParams = new URLSearchParams({
+        page: completedPage.toString(),
+        limit: "10",
+        search: completedSearch,
+        status_filter: completedStatusFilter,
+        sort_by: completedSortBy
+      });
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/cases/completed?${queryParams}`, {
+        headers: { "Authorization": `Bearer ${session.accessToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCompletedCases(data.cases || []);
+        setCompletedTotal(data.total || 0);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setCompletedError(errData.detail || "Unable to load completed cases.");
+      }
+    } catch (e) {
+      console.error(e);
+      setCompletedError("Unable to load completed cases.");
+    } finally {
+      setCompletedLoading(false);
+    }
+  }, [session, completedPage, completedSearch, completedStatusFilter, completedSortBy]);
+
+  useEffect(() => {
+    if (activeTab === "Completed Cases" && !selectedCaseId) {
+      fetchCompletedCases();
+    }
+  }, [activeTab, selectedCaseId, fetchCompletedCases]);
 
   // ─── Open Cases Fetching ───
   const fetchOpenCases = useCallback(async () => {
@@ -1079,8 +1141,38 @@ function UserDashboardContent() {
     }
   };
 
+  const [isForwardConfirmModalOpen, setIsForwardConfirmModalOpen] = useState(false);
+  const [forwardingInProgress, setForwardingInProgress] = useState(false);
+
   const handleForwardToExpert = () => {
-    showToast("Expert review workflow will be available soon.", "info");
+    setIsForwardConfirmModalOpen(true);
+  };
+
+  const handleConfirmForwardToExpert = async () => {
+    if (!selectedCaseId || !session?.accessToken || forwardingInProgress) return;
+    setForwardingInProgress(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/cases/${selectedCaseId}/forward-to-expert`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${session.accessToken}` }
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        showToast("Investigation marked as completed and case forwarded to Expert module!", "success");
+        setIsForwardConfirmModalOpen(false);
+        fetchCaseDetail(selectedCaseId);
+        fetchCases();
+        fetchCompletedCases();
+        fetchStats();
+      } else {
+        const detailStr = typeof data.detail === "string" ? data.detail : (data.detail?.message || "Failed to forward case to expert.");
+        showToast(detailStr, "error");
+      }
+    } catch (err) {
+      showToast("Error communicating with server during case forwarding.", "error");
+    } finally {
+      setForwardingInProgress(false);
+    }
   };
 
   // ─── Case Messaging / Chat Logic ───
@@ -1821,11 +1913,16 @@ function UserDashboardContent() {
     const map: { [key: string]: string } = {
       DRAFT: "bg-slate-100 text-slate-700 border-slate-300",
       CASE_FILED: "bg-amber-50 text-amber-800 border-amber-300",
+      ASSIGNED: "bg-purple-50 text-purple-800 border-purple-300",
+      IN_PROGRESS: "bg-purple-50 text-purple-800 border-purple-300",
       CASE_UNDER_INVESTIGATION: "bg-purple-50 text-purple-800 border-purple-300",
+      FORWARDED_TO_EXPERT: "bg-indigo-50 text-indigo-800 border-indigo-300",
+      UNDER_EXPERT_REVIEW: "bg-blue-50 text-blue-800 border-blue-300",
+      VERIFIED: "bg-emerald-50 text-emerald-800 border-emerald-300",
       CLOSED: "bg-emerald-50 text-emerald-800 border-emerald-300",
       CASE_OPENED: "bg-purple-50 text-purple-800 border-purple-300",
       UNDER_ANALYSIS: "bg-purple-50 text-purple-800 border-purple-300",
-      EXPERT_REVIEW: "bg-purple-50 text-purple-800 border-purple-300",
+      EXPERT_REVIEW: "bg-indigo-50 text-indigo-800 border-indigo-300",
       OPEN: "bg-amber-50 text-amber-800 border-amber-300",
       REVIEW: "bg-purple-50 text-purple-800 border-purple-300",
       RESOLVED: "bg-emerald-50 text-emerald-800 border-emerald-300",
@@ -1835,11 +1932,16 @@ function UserDashboardContent() {
     const labels: { [key: string]: string } = {
       DRAFT: "Draft",
       CASE_FILED: "Case Filed",
+      ASSIGNED: "Assigned",
+      IN_PROGRESS: "In Progress",
       CASE_UNDER_INVESTIGATION: "Under Investigation",
+      FORWARDED_TO_EXPERT: "Forwarded to Expert",
+      UNDER_EXPERT_REVIEW: "Under Expert Review",
+      VERIFIED: "Verified",
       CLOSED: "Closed",
       CASE_OPENED: "Under Investigation",
       UNDER_ANALYSIS: "Under Investigation",
-      EXPERT_REVIEW: "Under Investigation",
+      EXPERT_REVIEW: "Under Expert Review",
       OPEN: "Case Filed",
       REVIEW: "Under Investigation",
       RESOLVED: "Resolved",
@@ -1856,6 +1958,33 @@ function UserDashboardContent() {
     return (
       <span className={`inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-bold border whitespace-nowrap ${map[normalizedKey] || "bg-purple-50 text-purple-800 border-purple-300"}`}>
         {displayLabel}
+      </span>
+    );
+  };
+
+  // Render Expert Review status badge
+  const renderExpertReviewBadge = (statusStr: string | null | undefined) => {
+    const raw = (statusStr || "UNDER_REVIEW").toUpperCase().replace(/\s+/g, "_");
+    if (raw === "VERIFIED" || raw === "APPROVED") {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-300 whitespace-nowrap">
+          <CheckCircle className="h-3.5 w-3.5 text-emerald-600" />
+          Verified
+        </span>
+      );
+    }
+    if (raw === "REJECTED") {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-800 border border-rose-300 whitespace-nowrap">
+          <X className="h-3.5 w-3.5 text-rose-600" />
+          Rejected
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-50 text-indigo-800 border border-indigo-300 whitespace-nowrap">
+        <Clock className="h-3.5 w-3.5 text-indigo-600" />
+        Under Expert Review
       </span>
     );
   };
@@ -2092,6 +2221,7 @@ function UserDashboardContent() {
                 { id: "Dashboard", label: "Dashboard", icon: <LayoutDashboard className="h-4 w-4" /> },
                 { id: "All Cases", label: "All Cases", icon: <ShieldAlert className="h-4 w-4" /> },
                 { id: "Assigned Cases", label: "Assigned Cases", icon: <FolderSearch className="h-4 w-4" /> },
+                { id: "Completed Cases", label: "Completed Cases", icon: <CheckCircle className="h-4 w-4" /> },
                 { id: "Reports", label: "Reports", icon: <FileText className="h-4 w-4" /> },
                 { id: "Profile", label: "Profile", icon: <User className="h-4 w-4" /> },
                 { id: "Settings", label: "Settings", icon: <Settings className="h-4 w-4" /> },
@@ -2146,6 +2276,7 @@ function UserDashboardContent() {
                   { id: "Dashboard", label: "Dashboard", icon: <LayoutDashboard className="h-4 w-4" /> },
                   { id: "All Cases", label: "All Cases", icon: <ShieldAlert className="h-4 w-4" /> },
                   { id: "Assigned Cases", label: "Assigned Cases", icon: <FolderSearch className="h-4 w-4" /> },
+                  { id: "Completed Cases", label: "Completed Cases", icon: <CheckCircle className="h-4 w-4" /> },
                   { id: "Reports", label: "Reports", icon: <FileText className="h-4 w-4" /> },
                   { id: "Profile", label: "Profile", icon: <User className="h-4 w-4" /> },
                   { id: "Settings", label: "Settings", icon: <Settings className="h-4 w-4" /> },
@@ -2191,19 +2322,23 @@ function UserDashboardContent() {
               {/* Stats Grid */}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 {(isInvestigator ? [
-                  { label: "Available Cases", value: stats.availableCases, icon: <ShieldAlert className="h-4 w-4 text-amber-600" />, loading: statsLoading },
-                  { label: "Assigned Cases", value: stats.assignedCases, icon: <FolderSearch className="h-4 w-4 text-[#CC2200]" />, loading: statsLoading },
-                  { label: "Evidence Files Reviewed", value: stats.evidenceUploaded, icon: <FileVideo className="h-4 w-4 text-purple-600" />, loading: statsLoading },
-                  { label: "AI Analyses Completed", value: stats.aiAnalysesCompleted, icon: <BrainCircuit className="h-4 w-4 text-emerald-600" />, loading: statsLoading },
+                  { label: "Assigned Cases", value: stats.assignedCases, icon: <FolderSearch className="h-4 w-4 text-[#CC2200]" />, loading: statsLoading, tab: "Assigned Cases" },
+                  { label: "In Progress", value: stats.inProgressCases, icon: <Activity className="h-4 w-4 text-amber-600" />, loading: statsLoading, tab: "Assigned Cases" },
+                  { label: "Available Cases", value: stats.availableCases, icon: <ShieldAlert className="h-4 w-4 text-blue-600" />, loading: statsLoading, tab: "All Cases" },
+                  { label: "Completed Cases", value: stats.completedCases, icon: <CheckCircle className="h-4 w-4 text-[#0a0a0a]" />, loading: statsLoading, tab: "Completed Cases" },
                 ] : [
-                  { label: "Total Cases", value: stats.totalCases, icon: <FolderSearch className="h-4 w-4 text-[#CC2200]" />, loading: statsLoading },
-                  { label: "Open Cases", value: stats.openCases, icon: <Activity className="h-4 w-4 text-sky-600" />, loading: statsLoading },
-                  { label: "Evidence Uploaded", value: stats.evidenceUploaded, icon: <FileVideo className="h-4 w-4 text-purple-600" />, loading: statsLoading },
-                  { label: "AI Scans", value: stats.aiAnalysesCompleted, icon: <BrainCircuit className="h-4 w-4 text-emerald-600" />, loading: statsLoading },
-                ]).map((card, i) => (
-                  <div key={i} className="bg-white border border-[#e5e5e5] rounded-lg p-5 shadow-sm hover:shadow-md transition-shadow text-left">
+                  { label: "Total Cases", value: stats.totalCases, icon: <FolderSearch className="h-4 w-4 text-[#CC2200]" />, loading: statsLoading, tab: "My Cases" },
+                  { label: "Open Cases", value: stats.openCases, icon: <Activity className="h-4 w-4 text-sky-600" />, loading: statsLoading, tab: "My Cases" },
+                  { label: "Evidence Uploaded", value: stats.evidenceUploaded, icon: <FileVideo className="h-4 w-4 text-purple-600" />, loading: statsLoading, tab: "Evidence Library" },
+                  { label: "AI Scans", value: stats.aiAnalysesCompleted, icon: <BrainCircuit className="h-4 w-4 text-emerald-600" />, loading: statsLoading, tab: "AI Analysis" },
+                ]).map((card: any, i) => (
+                  <div
+                    key={i}
+                    onClick={() => card.tab && navigateTo(card.tab as any)}
+                    className="bg-white border border-[#e5e5e5] rounded-lg p-5 shadow-sm hover:shadow-md transition-shadow text-left cursor-pointer group"
+                  >
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-xs font-semibold text-[#0a0a0a]/50 uppercase tracking-wider">{card.label}</span>
+                      <span className="text-xs font-semibold text-[#0a0a0a]/50 uppercase tracking-wider group-hover:text-[#0a0a0a] transition-colors">{card.label}</span>
                       {card.icon}
                     </div>
                     {card.loading ? (
@@ -2585,6 +2720,189 @@ function UserDashboardContent() {
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* ──────────────── COMPLETED CASES VIEW (INVESTIGATOR) ──────────────── */}
+          {activeTab === "Completed Cases" && !selectedCaseId && (
+            <div className="space-y-6 animate-scale-up text-left">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-3">
+                    <h1 className="text-2xl font-bold tracking-tight">Completed Cases</h1>
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-[#0a0a0a] border border-[#e5e5e5]">
+                      Total Completed: {completedTotal}
+                    </span>
+                  </div>
+                  <p className="text-sm text-[#0a0a0a]/50 mt-1">
+                    Cases where your digital investigation was completed and forwarded to the Expert module for review.
+                  </p>
+                </div>
+              </div>
+
+              {/* Filters toolbar */}
+              <div className="flex flex-col sm:flex-row gap-3 bg-white p-4 border border-[#e5e5e5] rounded-lg shadow-sm w-full">
+                {/* Search */}
+                <div className="relative flex-1 min-w-[200px]">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#0a0a0a]/40" />
+                  <input
+                    type="text"
+                    placeholder="Search completed cases by #, title, or category..."
+                    value={completedSearch}
+                    onChange={(e) => { setCompletedSearch(e.target.value); setCompletedPage(1); }}
+                    className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-[#e5e5e5] rounded-md text-sm outline-none focus:ring-1 focus:ring-[#CC2200] focus:border-[#CC2200] transition-colors"
+                  />
+                </div>
+
+                {/* Status & Sort Filters */}
+                <div className="flex flex-wrap sm:flex-nowrap gap-2 sm:flex-shrink-0">
+                  <select
+                    value={completedStatusFilter}
+                    onChange={(e) => { setCompletedStatusFilter(e.target.value); setCompletedPage(1); }}
+                    className="w-full sm:w-52 bg-slate-50 border border-[#e5e5e5] rounded-md text-sm px-3 py-2 outline-none focus:ring-1 focus:ring-[#CC2200] text-[#0a0a0a] cursor-pointer"
+                  >
+                    <option value="">All Review Statuses</option>
+                    <option value="FORWARDED_TO_EXPERT">Forwarded to Expert</option>
+                    <option value="UNDER_EXPERT_REVIEW">Under Expert Review</option>
+                    <option value="VERIFIED">Verified</option>
+                    <option value="CLOSED">Closed</option>
+                  </select>
+
+                  <select
+                    value={completedSortBy}
+                    onChange={(e) => { setCompletedSortBy(e.target.value); setCompletedPage(1); }}
+                    className="w-full sm:w-36 bg-slate-50 border border-[#e5e5e5] rounded-md text-sm px-3 py-2 outline-none focus:ring-1 focus:ring-[#CC2200] text-[#0a0a0a] cursor-pointer"
+                  >
+                    <option value="newest">Newest First</option>
+                    <option value="oldest">Oldest First</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Completed Cases Grid / Cards */}
+              {completedLoading ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="bg-white border border-[#e5e5e5] rounded-xl p-5 shadow-sm space-y-4 animate-pulse">
+                      <div className="flex justify-between items-center">
+                        <div className="h-4 w-24 bg-slate-200 rounded" />
+                        <div className="h-4 w-28 bg-slate-200 rounded-full" />
+                      </div>
+                      <div className="h-5 w-3/4 bg-slate-200 rounded" />
+                      <div className="h-12 bg-slate-100 rounded" />
+                      <div className="h-4 w-1/2 bg-slate-200 rounded" />
+                    </div>
+                  ))}
+                </div>
+              ) : completedError ? (
+                <div className="bg-white border border-[#e5e5e5] rounded-xl p-12 text-center space-y-3 shadow-sm">
+                  <ShieldAlert className="h-10 w-10 text-rose-500 mx-auto" />
+                  <p className="text-base font-bold text-[#0a0a0a]/80">{completedError}</p>
+                  <button
+                    onClick={() => fetchCompletedCases()}
+                    className="px-4 py-2 bg-slate-800 text-white rounded-md text-xs font-bold hover:bg-[#CC2200] transition-colors cursor-pointer"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : completedCases.length === 0 ? (
+                <div className="bg-white border border-[#e5e5e5] rounded-xl p-12 text-center space-y-3 shadow-sm">
+                  <CheckCircle className="h-12 w-12 text-[#0a0a0a]/20 mx-auto" />
+                  <p className="text-base font-bold text-[#0a0a0a]/70">No completed cases found</p>
+                  <p className="text-xs text-[#0a0a0a]/40 max-w-sm mx-auto">
+                    Cases will appear here once you complete your investigation and forward them to the Expert module.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                  {completedCases.map((c: any) => (
+                    <div
+                      key={c.id}
+                      className="bg-white border border-[#e5e5e5] rounded-xl p-5 shadow-sm hover:shadow-md hover:border-[#CC2200]/50 transition-all flex flex-col justify-between text-left space-y-4"
+                    >
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-mono font-bold text-xs text-[#CC2200] tracking-wider">{c.case_number}</span>
+                          {renderExpertReviewBadge(c.expert_review_status || (c.status === "VERIFIED" ? "VERIFIED" : "UNDER_EXPERT_REVIEW"))}
+                        </div>
+
+                        <div>
+                          <h3 className="font-bold text-base text-[#0a0a0a] line-clamp-1" title={c.title}>
+                            {c.title}
+                          </h3>
+                          <p className="text-xs text-[#0a0a0a]/50 mt-0.5 font-medium">
+                            {c.category || "Forensic Investigation"}
+                          </p>
+                        </div>
+
+                        {c.description && (
+                          <p className="text-xs text-[#0a0a0a]/70 line-clamp-2 leading-relaxed" title={c.description}>
+                            {c.description}
+                          </p>
+                        )}
+
+                        <div className="pt-3 border-t border-[#e5e5e5] space-y-2 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-semibold text-[#0a0a0a]/50 uppercase tracking-wider">Date Assigned:</span>
+                            <span className="font-medium text-[#0a0a0a]">
+                              {formatDate(c.date_assigned || c.opened_at || c.created_at)}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-semibold text-[#0a0a0a]/50 uppercase tracking-wider">Forwarded:</span>
+                            <span className="font-bold text-indigo-700">
+                              {formatDate(c.forwarded_to_expert_at || c.investigator_completed_at || c.forwarded_date)}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-semibold text-[#0a0a0a]/50 uppercase tracking-wider">Evidence Files:</span>
+                            <span className="font-medium text-[#0a0a0a]">
+                              {c.evidence?.length || 0} Files
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="pt-3 border-t border-[#e5e5e5] flex justify-end">
+                        <button
+                          onClick={() => viewCaseDetails(c.id)}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#CC2200] hover:bg-[#a81c00] text-white text-xs font-bold rounded-md shadow-xs transition-colors cursor-pointer"
+                        >
+                          <span>View Case</span>
+                          <span>&rarr;</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Pagination */}
+              {completedTotal > 10 && (
+                <div className="bg-white border border-[#e5e5e5] rounded-xl px-6 py-4 flex justify-between items-center shadow-sm">
+                  <span className="text-xs text-[#0a0a0a]/50">
+                    Showing {(completedPage - 1) * 10 + 1} to {Math.min(completedPage * 10, completedTotal)} of {completedTotal} cases
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setCompletedPage(prev => Math.max(prev - 1, 1))}
+                      disabled={completedPage === 1}
+                      className="p-1.5 border border-[#e5e5e5] rounded bg-white hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => setCompletedPage(prev => Math.min(prev + 1, Math.ceil(completedTotal / 10)))}
+                      disabled={completedPage >= Math.ceil(completedTotal / 10)}
+                      className="p-1.5 border border-[#e5e5e5] rounded bg-white hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -4967,6 +5285,57 @@ function UserDashboardContent() {
                 className="px-4 py-2 bg-[#CC2200] hover:bg-[#a81c00] text-white rounded-md text-xs font-bold transition-colors shadow-xs"
               >
                 View Assigned Cases
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ──────────────── FORWARD TO EXPERT CONFIRMATION MODAL ──────────────── */}
+      {isForwardConfirmModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in text-left">
+          <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-2xl border border-[#e5e5e5] space-y-4 animate-scale-up">
+            <div className="flex items-center gap-3 text-indigo-600">
+              <div className="p-2 bg-indigo-50 rounded-full">
+                <Send className="h-6 w-6 text-indigo-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-lg text-[#0a0a0a]">Forward Case to Expert</h3>
+                {caseDetail?.case_number && (
+                  <p className="text-xs text-[#0a0a0a]/50">Case #{caseDetail.case_number}</p>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-3 text-xs text-[#0a0a0a]/80 bg-slate-50 p-4 rounded-lg border border-[#e5e5e5]">
+              <p className="font-semibold text-sm text-[#0a0a0a]">
+                Are you ready to complete your investigation and submit this case file?
+              </p>
+              <ul className="space-y-1.5 list-disc pl-5 text-[#0a0a0a]/75 leading-relaxed">
+                <li>Your investigation portion will be marked as <strong className="text-slate-900">Completed</strong>.</li>
+                <li>The case will move to your <strong className="text-slate-900">Completed Cases</strong> tab.</li>
+                <li>The case file will become available to the <strong className="text-indigo-700">Expert Module</strong> for verification.</li>
+                <li>Modifications to this investigation will become locked (read-only).</li>
+              </ul>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#e5e5e5]">
+              <button
+                type="button"
+                onClick={() => setIsForwardConfirmModalOpen(false)}
+                disabled={forwardingInProgress}
+                className="px-4 py-2 border border-[#e5e5e5] rounded-md text-xs font-bold text-[#0a0a0a]/70 hover:bg-slate-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmForwardToExpert}
+                disabled={forwardingInProgress}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md text-xs font-bold transition-colors shadow-xs"
+              >
+                {forwardingInProgress ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                {forwardingInProgress ? "Forwarding..." : "Confirm & Forward to Expert"}
               </button>
             </div>
           </div>

@@ -115,10 +115,29 @@ def init_db_updates():
         if not res_inv:
             db.execute(text("ALTER TABLE investigation_cases ADD COLUMN assigned_investigator_id INT NULL"))
 
-        # Sync assigned_expert and assigned_investigator_id columns
+        res_fwd = db.execute(text("SHOW COLUMNS FROM investigation_cases LIKE 'forwarded_to_expert_at'")).fetchone()
+        if not res_fwd:
+            db.execute(text("ALTER TABLE investigation_cases ADD COLUMN forwarded_to_expert_at DATETIME NULL"))
+
+        res_inv_comp = db.execute(text("SHOW COLUMNS FROM investigation_cases LIKE 'investigator_completed_at'")).fetchone()
+        if not res_inv_comp:
+            db.execute(text("ALTER TABLE investigation_cases ADD COLUMN investigator_completed_at DATETIME NULL"))
+
+        res_exp_st = db.execute(text("SHOW COLUMNS FROM investigation_cases LIKE 'expert_review_status'")).fetchone()
+        if not res_exp_st:
+            db.execute(text("ALTER TABLE investigation_cases ADD COLUMN expert_review_status VARCHAR(50) NULL DEFAULT 'PENDING'"))
+
+        res_exp_ver = db.execute(text("SHOW COLUMNS FROM investigation_cases LIKE 'expert_verified_at'")).fetchone()
+        if not res_exp_ver:
+            db.execute(text("ALTER TABLE investigation_cases ADD COLUMN expert_verified_at DATETIME NULL"))
+
+        res_cls = db.execute(text("SHOW COLUMNS FROM investigation_cases LIKE 'closed_at'")).fetchone()
+        if not res_cls:
+            db.execute(text("ALTER TABLE investigation_cases ADD COLUMN closed_at DATETIME NULL"))
+
+        # Sync assigned_investigator_id for legacy cases where only assigned_expert was stored
         try:
             db.execute(text("UPDATE investigation_cases SET assigned_investigator_id = assigned_expert WHERE assigned_expert IS NOT NULL AND assigned_investigator_id IS NULL"))
-            db.execute(text("UPDATE investigation_cases SET assigned_expert = assigned_investigator_id WHERE assigned_investigator_id IS NOT NULL AND assigned_expert IS NULL"))
         except Exception as sync_e:
             print("Sync column note:", sync_e)
 

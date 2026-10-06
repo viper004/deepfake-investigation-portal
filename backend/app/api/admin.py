@@ -638,11 +638,11 @@ def get_overview_stats(
         st_str = (st_val.value if hasattr(st_val, "value") else str(st_val or "")).upper()
         if st_str in ["CASE_FILED", "OPEN", "CASE_OPENED", "DRAFT"]:
             status_category_counts["Open"] += count
-        elif st_str in ["CASE_UNDER_INVESTIGATION", "UNDER_ANALYSIS", "UNDER_INVESTIGATION"]:
+        elif st_str in ["CASE_UNDER_INVESTIGATION", "UNDER_ANALYSIS", "UNDER_INVESTIGATION", "ASSIGNED", "IN_PROGRESS"]:
             status_category_counts["Under Investigation"] += count
-        elif st_str in ["EXPERT_REVIEW", "REVIEW", "PENDING"]:
+        elif st_str in ["FORWARDED_TO_EXPERT", "UNDER_EXPERT_REVIEW", "EXPERT_REVIEW", "REVIEW", "PENDING"]:
             status_category_counts["Pending Review"] += count
-        elif st_str in ["RESOLVED", "APPROVED"]:
+        elif st_str in ["RESOLVED", "APPROVED", "VERIFIED"]:
             status_category_counts["Resolved"] += count
         elif st_str in ["CLOSED", "COMPLETED", "CASE_CLOSED"]:
             status_category_counts["Closed"] += count

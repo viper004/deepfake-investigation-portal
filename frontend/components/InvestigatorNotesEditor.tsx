@@ -30,7 +30,10 @@ import {
   Eye,
   Calendar,
   Tag,
-  Layers
+  Layers,
+  Upload,
+  Download,
+  Paperclip
 } from "lucide-react";
 
 export interface InvestigatorNoteType {
@@ -47,6 +50,17 @@ export interface InvestigatorNoteType {
   created_at: string;
   updated_at?: string;
 }
+
+export interface InvestigationDocumentType {
+  id: number;
+  original_filename: string;
+  mime_type: string;
+  file_size: number;
+  uploaded_at: string;
+  investigator_id: number;
+  investigator_name: string;
+}
+
 
 interface InvestigatorNotesEditorProps {
   caseId: number;
@@ -102,8 +116,12 @@ export default function InvestigatorNotesEditor({
   userFullName = "Investigator"
 }: InvestigatorNotesEditorProps) {
   const [notes, setNotes] = useState<InvestigatorNoteType[]>([]);
+  const [documents, setDocuments] = useState<InvestigationDocumentType[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
+  const [uploadingDoc, setUploadingDoc] = useState<boolean>(false);
+  const [deletingDocId, setDeletingDocId] = useState<number | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Modal States
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false);
@@ -193,25 +211,29 @@ export default function InvestigatorNotesEditor({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [deletingNoteId, editingNote, isCreateModalOpen, viewingNote, showAllNotesModal]);
 
-  // Fetch Investigation Notes
+  // Fetch Investigation Notes and Documents
   const fetchNotes = async () => {
     if (!accessToken || !caseId) return;
     try {
       setLoading(true);
-      const res = await fetch(`${backendUrl}/api/v1/user/cases/${caseId}/investigation-notes`, {
-        headers: {
-          "Authorization": `Bearer ${accessToken}`
-        }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setNotes(data);
-      } else {
-        const err = await res.json();
-        console.error("Failed to fetch investigator notes:", err);
+      const [notesRes, docsRes] = await Promise.all([
+        fetch(`${backendUrl}/api/v1/user/cases/${caseId}/investigation-notes`, {
+          headers: { "Authorization": `Bearer ${accessToken}` }
+        }),
+        fetch(`${backendUrl}/api/v1/user/cases/${caseId}/investigation-documents`, {
+          headers: { "Authorization": `Bearer ${accessToken}` }
+        })
+      ]);
+      
+      if (notesRes.ok) {
+        setNotes(await notesRes.json());
+      }
+      
+      if (docsRes.ok) {
+        setDocuments(await docsRes.json());
       }
     } catch (error) {
-      console.error("Error fetching investigator notes:", error);
+      console.error("Error fetching investigation data:", error);
     } finally {
       setLoading(false);
     }
@@ -393,6 +415,68 @@ export default function InvestigatorNotesEditor({
     }
   };
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !accessToken) return;
+    
+    // Check size (e.g. 50MB max)
+    if (file.size > 50 * 1024 * 1024) {
+      showFeedback("error", "File too large. Maximum size is 50MB.");
+      return;
+    }
+    
+    setUploadingDoc(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      
+      const res = await fetch(`${backendUrl}/api/v1/user/cases/${caseId}/investigation-documents`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`
+        },
+        body: formData
+      });
+      
+      if (res.ok) {
+        const newDoc = await res.json();
+        setDocuments(prev => [newDoc, ...prev]);
+        showFeedback("success", "Investigation document uploaded.");
+      } else {
+        const err = await res.json();
+        showFeedback("error", err.detail || "Failed to upload document.");
+      }
+    } catch (error) {
+      showFeedback("error", "Error uploading document.");
+    } finally {
+      setUploadingDoc(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleDeleteDocument = async (docId: number) => {
+    if (!accessToken) return;
+    if (!confirm("Are you sure you want to delete this document?")) return;
+    try {
+      const res = await fetch(`${backendUrl}/api/v1/user/cases/${caseId}/investigation-documents/${docId}`, {
+        method: "DELETE",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`
+        }
+      });
+      
+      if (res.ok) {
+        setDocuments(prev => prev.filter(d => d.id !== docId));
+        showFeedback("success", "Investigation document deleted.");
+      } else {
+        const err = await res.json();
+        showFeedback("error", err.detail || "Failed to delete document.");
+      }
+    } catch (error) {
+      showFeedback("error", "Error deleting document.");
+    }
+  };
+
   if (!isMounted) {
     return (
       <div className="bg-white border border-[#e5e5e5] rounded-xl p-6 text-center text-xs text-slate-400">
@@ -414,15 +498,34 @@ export default function InvestigatorNotesEditor({
         </div>
 
         {canCreateAndEditNotes && (
-          <button
-            type="button"
-            onClick={handleOpenCreateModal}
-            aria-label="New Investigation Note"
-            title="New Investigation Note"
-            className="w-7 h-7 rounded-lg bg-[#CC2200] hover:bg-[#b31e00] text-white flex items-center justify-center transition-all shadow-xs cursor-pointer shrink-0"
-          >
-            <Plus className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              onChange={handleFileUpload} 
+              className="hidden" 
+              accept=".pdf,.doc,.docx,.txt,.xls,.xlsx,.csv,.jpg,.png" 
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadingDoc}
+              aria-label="Upload Investigation Document"
+              title="Upload Investigation Document"
+              className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 text-white flex items-center justify-center transition-all shadow-xs cursor-pointer shrink-0 disabled:opacity-50"
+            >
+              {uploadingDoc ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+            </button>
+            <button
+              type="button"
+              onClick={handleOpenCreateModal}
+              aria-label="New Investigation Note"
+              title="New Investigation Note"
+              className="w-7 h-7 rounded-lg bg-[#CC2200] hover:bg-[#b31e00] text-white flex items-center justify-center transition-all shadow-xs cursor-pointer shrink-0"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          </div>
         )}
       </div>
 
@@ -546,6 +649,61 @@ export default function InvestigatorNotesEditor({
                 </button>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Investigation Documents Section */}
+        {documents.length > 0 && (
+          <div className="pt-4 border-t border-slate-200 space-y-3">
+            <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+              <Paperclip className="h-3.5 w-3.5 text-slate-500" />
+              Investigation Documents
+            </h4>
+            <div className="space-y-2">
+              {documents.map(doc => (
+                <div key={doc.id} className="p-3 bg-white border border-slate-200 rounded-lg flex items-center justify-between group hover:border-slate-300 transition-colors">
+                  <div className="flex items-center gap-3 overflow-hidden">
+                    <div className="w-8 h-8 rounded bg-slate-100 flex items-center justify-center shrink-0">
+                      <FileText className="h-4 w-4 text-slate-500" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-slate-900 truncate" title={doc.original_filename}>
+                        {doc.original_filename}
+                      </p>
+                      <p className="text-[10px] text-slate-500 flex items-center gap-1 mt-0.5">
+                        <span>{doc.file_size > 1048576 ? (doc.file_size / 1048576).toFixed(1) + ' MB' : (doc.file_size / 1024).toFixed(1) + ' KB'}</span>
+                        <span>•</span>
+                        <span className="uppercase">{doc.original_filename.split('.').pop()}</span>
+                        <span>•</span>
+                        <span>{doc.investigator_name}</span>
+                      </p>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 ml-2">
+                    <a
+                      href={`${backendUrl}/api/v1/user/cases/${caseId}/investigation-documents/${doc.id}/download`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded transition-colors"
+                      title="Download"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                    </a>
+                    {(canCreateAndEditNotes && String(doc.investigator_id) === currentUserIdStr) && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteDocument(doc.id)}
+                        className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors"
+                        title="Delete"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
