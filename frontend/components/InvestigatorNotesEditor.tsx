@@ -61,6 +61,19 @@ export interface InvestigationDocumentType {
   investigator_name: string;
 }
 
+export interface FinalCaseReportType {
+  id: number;
+  original_filename: string;
+  mime_type: string;
+  file_size: number;
+  version: number;
+  is_submitted: boolean;
+  uploaded_at: string;
+  submitted_at?: string;
+  investigator_id: number;
+  investigator_name: string;
+}
+
 
 interface InvestigatorNotesEditorProps {
   caseId: number;
@@ -117,11 +130,14 @@ export default function InvestigatorNotesEditor({
 }: InvestigatorNotesEditorProps) {
   const [notes, setNotes] = useState<InvestigatorNoteType[]>([]);
   const [documents, setDocuments] = useState<InvestigationDocumentType[]>([]);
+  const [finalReport, setFinalReport] = useState<FinalCaseReportType | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
   const [uploadingDoc, setUploadingDoc] = useState<boolean>(false);
+  const [uploadingReport, setUploadingReport] = useState<boolean>(false);
   const [deletingDocId, setDeletingDocId] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const reportInputRef = useRef<HTMLInputElement>(null);
 
   // Modal States
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false);
@@ -216,11 +232,14 @@ export default function InvestigatorNotesEditor({
     if (!accessToken || !caseId) return;
     try {
       setLoading(true);
-      const [notesRes, docsRes] = await Promise.all([
+      const [notesRes, docsRes, reportRes] = await Promise.all([
         fetch(`${backendUrl}/api/v1/user/cases/${caseId}/investigation-notes`, {
           headers: { "Authorization": `Bearer ${accessToken}` }
         }),
         fetch(`${backendUrl}/api/v1/user/cases/${caseId}/investigation-documents`, {
+          headers: { "Authorization": `Bearer ${accessToken}` }
+        }),
+        fetch(`${backendUrl}/api/v1/user/cases/${caseId}/final-report`, {
           headers: { "Authorization": `Bearer ${accessToken}` }
         })
       ]);
@@ -231,6 +250,11 @@ export default function InvestigatorNotesEditor({
       
       if (docsRes.ok) {
         setDocuments(await docsRes.json());
+      }
+
+      if (reportRes.ok) {
+        const reportData = await reportRes.json();
+        setFinalReport(reportData); // will be null if no report
       }
     } catch (error) {
       console.error("Error fetching investigation data:", error);
@@ -477,6 +501,67 @@ export default function InvestigatorNotesEditor({
     }
   };
 
+  const handleReportUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !accessToken) return;
+    
+    if (file.size > 50 * 1024 * 1024) {
+      showFeedback("error", "File too large. Maximum size is 50MB.");
+      return;
+    }
+    
+    setUploadingReport(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      
+      const res = await fetch(`${backendUrl}/api/v1/user/cases/${caseId}/final-report`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`
+        },
+        body: formData
+      });
+      
+      if (res.ok) {
+        const newReport = await res.json();
+        setFinalReport(newReport);
+        showFeedback("success", "Final Case Report uploaded successfully.");
+      } else {
+        const err = await res.json();
+        showFeedback("error", err.detail || "Failed to upload final report.");
+      }
+    } catch (error) {
+      showFeedback("error", "Error uploading final report.");
+    } finally {
+      setUploadingReport(false);
+      if (reportInputRef.current) reportInputRef.current.value = "";
+    }
+  };
+
+  const handleDeleteReport = async () => {
+    if (!accessToken || !finalReport) return;
+    if (!confirm("Are you sure you want to delete the Final Case Report?")) return;
+    try {
+      const res = await fetch(`${backendUrl}/api/v1/user/cases/${caseId}/final-report`, {
+        method: "DELETE",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`
+        }
+      });
+      
+      if (res.ok) {
+        setFinalReport(null);
+        showFeedback("success", "Final Case Report deleted.");
+      } else {
+        const err = await res.json();
+        showFeedback("error", err.detail || "Failed to delete final report.");
+      }
+    } catch (error) {
+      showFeedback("error", "Error deleting final report.");
+    }
+  };
+
   if (!isMounted) {
     return (
       <div className="bg-white border border-[#e5e5e5] rounded-xl p-6 text-center text-xs text-slate-400">
@@ -706,6 +791,100 @@ export default function InvestigatorNotesEditor({
             </div>
           </div>
         )}
+
+        {/* Final Case Report Section */}
+        <div className="pt-4 border-t border-slate-200 space-y-3">
+          <h4 className="text-xs font-extrabold text-[#CC2200] flex items-center gap-1.5 uppercase tracking-wide">
+            <Check className="h-4 w-4" />
+            FINAL CASE REPORT
+          </h4>
+          
+          <input 
+            type="file" 
+            ref={reportInputRef} 
+            onChange={handleReportUpload} 
+            className="hidden" 
+            accept=".pdf,.doc,.docx,.txt" 
+          />
+
+          {!finalReport ? (
+            <div className="p-4 bg-slate-50 border border-dashed border-slate-300 rounded-lg text-center space-y-3">
+              <p className="text-xs font-semibold text-slate-700">Official investigator conclusion</p>
+              <p className="text-[10px] text-slate-500 max-w-[200px] mx-auto leading-relaxed">
+                Upload the completed case report containing your findings and conclusions.
+              </p>
+              {canCreateAndEditNotes && (
+                <button
+                  type="button"
+                  onClick={() => reportInputRef.current?.click()}
+                  disabled={uploadingReport}
+                  className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-lg transition-colors inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
+                >
+                  {uploadingReport ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                  {uploadingReport ? "Uploading..." : "Upload Final Report"}
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1.5 rounded-md border border-emerald-100">
+                <Check className="h-3 w-3" />
+                {finalReport.is_submitted ? "Submitted to Expert" : "Ready for submission"}
+              </div>
+              <div className="p-3 bg-white border border-[#CC2200]/30 rounded-lg shadow-xs relative group overflow-hidden">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2 overflow-hidden">
+                    <FileText className="h-4 w-4 text-[#CC2200] shrink-0" />
+                    <p className="text-xs font-bold text-slate-900 truncate" title={finalReport.original_filename}>
+                      {finalReport.original_filename}
+                    </p>
+                  </div>
+                </div>
+                
+                <div className="text-[10px] text-slate-500 space-y-1 mb-3 bg-slate-50 p-2 rounded border border-slate-100">
+                  <div className="flex justify-between">
+                    <span>Format:</span>
+                    <span className="font-mono uppercase text-slate-700">{finalReport.original_filename.split('.').pop()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Size:</span>
+                    <span className="font-mono text-slate-700">{finalReport.file_size > 1048576 ? (finalReport.file_size / 1048576).toFixed(1) + ' MB' : (finalReport.file_size / 1024).toFixed(1) + ' KB'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Uploaded:</span>
+                    <span className="text-slate-700">{new Date(finalReport.uploaded_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Version:</span>
+                    <span className="font-bold text-slate-900">v{finalReport.version}</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <a
+                    href={`${backendUrl}/api/v1/user/cases/${caseId}/final-report/download`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-1 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <Eye className="h-3.5 w-3.5" /> View
+                  </a>
+                  {(!finalReport.is_submitted && canCreateAndEditNotes) && (
+                    <button
+                      type="button"
+                      onClick={() => reportInputRef.current?.click()}
+                      disabled={uploadingReport}
+                      className="flex-1 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      {uploadingReport ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                      Replace
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ─────────────────────────────────────────────────────────────

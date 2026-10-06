@@ -150,6 +150,8 @@ export default function InvestigatorCaseWorkspacePage() {
   const [selectedUploadFile, setSelectedUploadFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [hasFinalReport, setHasFinalReport] = useState(false);
+  const [finalReportData, setFinalReportData] = useState<any>(null);
 
   const [imageLoadErrors, setImageLoadErrors] = useState<Record<string, boolean>>({});
   const handleImageError = (urlKey: string) => {
@@ -490,6 +492,23 @@ export default function InvestigatorCaseWorkspacePage() {
         const data = await res.json();
         setCaseDetail(data);
         fetchScanResult(caseId);
+        
+        // Fetch Final Case Report
+        try {
+          const reportRes = await fetch(`${BACKEND_URL}/api/v1/user/cases/${caseId}/final-report`, {
+            headers: { Authorization: `Bearer ${session.accessToken}` }
+          });
+          if (reportRes.ok) {
+            const reportData = await reportRes.json();
+            setHasFinalReport(reportData !== null);
+            setFinalReportData(reportData);
+          } else {
+            setFinalReportData(null);
+          }
+        } catch (e) {
+          console.error("Failed to check final report status");
+          setFinalReportData(null);
+        }
       } else {
         const errData = await res.json();
         setError(errData.detail || "Failed to load case details.");
@@ -789,6 +808,10 @@ export default function InvestigatorCaseWorkspacePage() {
       showToast("Cannot forward: At least one evidence file is required before submitting for expert review.", "error");
       return;
     }
+    if (!hasFinalReport) {
+      showToast("Final Case Report is required before forwarding this case to an Expert.", "error");
+      return;
+    }
     setIsForwardConfirmModalOpen(true);
   };
 
@@ -1050,7 +1073,54 @@ export default function InvestigatorCaseWorkspacePage() {
           </div>
         )}
 
-
+        {/* ─── Prominent Final Case Report Banner ─── */}
+        {(isInvestigationCompleted && finalReportData && finalReportData.is_submitted) && (
+          <div className="bg-white border-2 border-[#CC2200] rounded-xl p-6 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-6 text-left animate-fade-in relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-[#CC2200]/5 rounded-bl-full -z-10"></div>
+            <div className="flex items-start gap-4 z-10">
+              <div className="w-12 h-12 rounded-xl bg-[#CC2200]/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <FileText className="h-6 w-6 text-[#CC2200]" />
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg font-black text-[#CC2200] tracking-tight uppercase">Final Case Report</h3>
+                  <span className="px-2 py-0.5 bg-[#CC2200]/10 text-[#CC2200] text-[10px] font-bold rounded uppercase">
+                    Official Conclusion
+                  </span>
+                </div>
+                <div className="text-xs text-slate-600 flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4 font-medium mt-1">
+                  <span>Submitted by: <strong className="text-slate-900">{finalReportData.investigator_name}</strong></span>
+                  <span className="hidden sm:inline text-slate-300">•</span>
+                  <span>Submitted: <strong className="text-slate-900">{new Date(finalReportData.submitted_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</strong></span>
+                </div>
+                <div className="text-[11px] text-slate-500 flex items-center gap-2 pt-1">
+                  <span className="font-mono">{finalReportData.original_filename}</span>
+                  <span>•</span>
+                  <span>{finalReportData.file_size > 1048576 ? (finalReportData.file_size / 1048576).toFixed(1) + ' MB' : (finalReportData.file_size / 1024).toFixed(1) + ' KB'}</span>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 w-full md:w-auto z-10">
+              <a
+                href={`${BACKEND_URL}/api/v1/user/cases/${caseId}/final-report/download`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 md:flex-none inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-[#CC2200] hover:bg-[#a81c00] text-white text-sm font-bold rounded-lg shadow-xs transition-colors"
+              >
+                <Eye className="h-4 w-4" /> View Report
+              </a>
+              <a
+                href={`${BACKEND_URL}/api/v1/user/cases/${caseId}/final-report/download`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 md:flex-none inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-bold rounded-lg transition-colors"
+                download={finalReportData.original_filename}
+              >
+                <Download className="h-4 w-4" /> Download
+              </a>
+            </div>
+          </div>
+        )}
 
         {/* Two-Column Case Content Workspace Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 text-left">
@@ -1527,13 +1597,20 @@ export default function InvestigatorCaseWorkspacePage() {
                 <span>Forwarded to Expert</span>
               </div>
             ) : (caseDetail.status === "CASE_UNDER_INVESTIGATION" || caseDetail.status === "ASSIGNED" || caseDetail.status === "IN_PROGRESS") && isClaimedInvestigator ? (
-              <button
-                onClick={handleForwardToExpert}
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-md transition-colors cursor-pointer flex-shrink-0"
-              >
-                <Send className="h-4 w-4" />
-                Forward to Expert
-              </button>
+              <div className="flex flex-col items-end gap-1">
+                <button
+                  onClick={handleForwardToExpert}
+                  disabled={!hasFinalReport}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white text-xs font-bold shadow-md transition-colors cursor-pointer flex-shrink-0"
+                  title={!hasFinalReport ? "Final Case Report is required before forwarding" : ""}
+                >
+                  <Send className="h-4 w-4" />
+                  Forward to Expert
+                </button>
+                {!hasFinalReport && (
+                  <span className="text-[10px] text-rose-500 font-bold">⚠ Final Report Required</span>
+                )}
+              </div>
             ) : null}
           </div>
         </div>

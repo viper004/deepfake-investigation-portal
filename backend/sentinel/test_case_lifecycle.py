@@ -170,6 +170,15 @@ def test_full_investigator_case_lifecycle():
             json={"content": "Initial acoustic analysis completed. Forwarding for expert endorsement."}
         )
         assert note_res.status_code == 200, note_res.text
+        
+        # Step 6b: Upload Final Case Report
+        report_bytes = b"FINAL CONCLUSION: Deepfake verified."
+        report_upload = client.post(
+            f"/api/v1/user/cases/{case_id}/final-report",
+            headers={"Authorization": f"Bearer {alpha_token}"},
+            files={"file": ("final_report.pdf", io.BytesIO(report_bytes), "application/pdf")}
+        )
+        assert report_upload.status_code == 200, report_upload.text
 
         # Step 7: Investigator Alpha successfully forwards case to Expert
         fwd_res = client.post(

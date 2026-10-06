@@ -16,7 +16,7 @@ import json
 from app.database.database import SessionLocal
 from app.models.models import (
     InvestigationCase, EvidenceFile, MediaMetadata, AIModel, AIAnalysis,
-    ForensicReview, InvestigationNote, InvestigatorNote, InvestigationDocument, Report, Notification, AuditLog, CaseMessage,
+    ForensicReview, InvestigationNote, InvestigatorNote, InvestigationDocument, FinalCaseReport, Report, Notification, AuditLog, CaseMessage,
     ForensicScan, StatusEnum, FileTypeEnum, AIResultEnum, ReportTypeEnum, MediaTypeEnum, MessageAttachment
 )
 from app.schemas.user import InvestigatorNoteCreate, InvestigatorNoteUpdate, InvestigatorNoteResponse
@@ -3252,6 +3252,18 @@ def forward_case_to_expert(
             detail="Cannot forward case to Expert: Forensic analysis or investigator notes must be completed before forwarding."
         )
 
+    final_report = db.query(FinalCaseReport).filter(FinalCaseReport.case_id == c.id).first()
+    if not final_report:
+        raise HTTPException(
+            status_code=400,
+            detail="Final Case Report is required before forwarding this case to an Expert."
+        )
+
+    now = datetime.now(timezone.utc)
+    final_report.is_submitted = True
+    final_report.submitted_at = now
+
+
     # 2. Mark the investigator's work as completed.
     # 3. Set the appropriate case status: FORWARDED_TO_EXPERT.
     c.status = StatusEnum.FORWARDED_TO_EXPERT
@@ -3536,3 +3548,192 @@ def delete_investigation_document(
     log_audit_event(db, case_id, user.id, "Investigation document deleted", f"Deleted document: {doc.original_filename}")
     
     return {"message": "Document deleted successfully"}
+# ─── Final Case Report Endpoints ───
+
+ALLOWED_FINAL_REPORT_TYPES = {
+    "application/pdf": ".pdf",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "text/plain": ".txt"
+}
+
+@router.post("/cases/{case_id}/final-report")
+async def upload_final_report(
+    case_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    if not is_investigator_or_admin(user):
+        raise HTTPException(status_code=403, detail="Only investigators can upload a final case report.")
+        
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+        
+    if c.assigned_investigator_id != user.id and not is_admin(user):
+        raise HTTPException(status_code=403, detail="You are not assigned to this case.")
+        
+    if c.status != StatusEnum.CASE_UNDER_INVESTIGATION and not is_admin(user):
+        raise HTTPException(status_code=403, detail="Cannot upload final report unless case is under investigation.")
+        
+    if file.content_type not in ALLOWED_FINAL_REPORT_TYPES:
+        raise HTTPException(status_code=400, detail="Unsupported file type for Final Case Report.")
+        
+    ext = ALLOWED_FINAL_REPORT_TYPES[file.content_type]
+    file_id = str(uuid.uuid4())
+    stored_filename = f"final_report_{case_id}_{file_id}{ext}"
+    stored_path = os.path.join(UPLOAD_DIR, "final_reports", stored_filename)
+    os.makedirs(os.path.dirname(stored_path), exist_ok=True)
+    
+    file_size = 0
+    sha256 = hashlib.sha256()
+    
+    with open(stored_path, "wb") as buffer:
+        while True:
+            chunk = await file.read(8192)
+            if not chunk:
+                break
+            buffer.write(chunk)
+            sha256.update(chunk)
+            file_size += len(chunk)
+            
+    if file_size == 0:
+        os.remove(stored_path)
+        raise HTTPException(status_code=400, detail="Empty file uploaded.")
+        
+    # Check if a report already exists and replace it
+    existing_report = db.query(FinalCaseReport).filter(FinalCaseReport.case_id == case_id).first()
+    if existing_report:
+        if existing_report.is_submitted and not is_admin(user):
+            os.remove(stored_path)
+            raise HTTPException(status_code=403, detail="Cannot replace Final Case Report after submission.")
+            
+        try:
+            if os.path.exists(existing_report.stored_path):
+                os.remove(existing_report.stored_path)
+        except Exception:
+            pass
+            
+        existing_report.original_filename = file.filename or stored_filename
+        existing_report.stored_path = stored_path
+        existing_report.mime_type = file.content_type
+        existing_report.file_size = file_size
+        existing_report.sha256_hash = sha256.hexdigest()
+        existing_report.version += 1
+        existing_report.uploaded_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(existing_report)
+        log_audit_event(db, case_id, user.id, "Final Case Report replaced", f"Replaced Final Case Report: {existing_report.original_filename} (v{existing_report.version})")
+        doc = existing_report
+    else:
+        doc = FinalCaseReport(
+            case_id=case_id,
+            investigator_id=user.id,
+            original_filename=file.filename or stored_filename,
+            stored_path=stored_path,
+            mime_type=file.content_type,
+            file_size=file_size,
+            sha256_hash=sha256.hexdigest(),
+            version=1,
+            is_submitted=False
+        )
+        db.add(doc)
+        db.commit()
+        db.refresh(doc)
+        log_audit_event(db, case_id, user.id, "Final Case Report uploaded", f"Uploaded Final Case Report: {doc.original_filename}")
+    
+    return {
+        "id": doc.id,
+        "original_filename": doc.original_filename,
+        "mime_type": doc.mime_type,
+        "file_size": doc.file_size,
+        "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
+        "investigator_id": doc.investigator_id,
+        "investigator_name": user.full_name,
+        "version": doc.version,
+        "is_submitted": doc.is_submitted,
+        "submitted_at": doc.submitted_at.isoformat() if doc.submitted_at else None
+    }
+
+@router.get("/cases/{case_id}/final-report")
+def get_final_report(
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+        
+    doc = db.query(FinalCaseReport).filter(FinalCaseReport.case_id == case_id).first()
+    
+    if not doc:
+        return None
+        
+    return {
+        "id": doc.id,
+        "original_filename": doc.original_filename,
+        "mime_type": doc.mime_type,
+        "file_size": doc.file_size,
+        "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
+        "investigator_id": doc.investigator_id,
+        "investigator_name": doc.investigator.full_name if doc.investigator else "Unknown",
+        "version": doc.version,
+        "is_submitted": doc.is_submitted,
+        "submitted_at": doc.submitted_at.isoformat() if doc.submitted_at else None
+    }
+
+@router.get("/cases/{case_id}/final-report/download")
+def download_final_report(
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    doc = db.query(FinalCaseReport).filter(FinalCaseReport.case_id == case_id).first()
+    
+    if not doc:
+        raise HTTPException(status_code=404, detail="Report not found")
+        
+    if not os.path.exists(doc.stored_path):
+        raise HTTPException(status_code=404, detail="File not found on server")
+        
+    log_audit_event(db, case_id, user.id, "Final Case Report downloaded", f"Downloaded Final Case Report: {doc.original_filename}")
+    
+    return FileResponse(
+        path=doc.stored_path,
+        filename=doc.original_filename,
+        media_type=doc.mime_type
+    )
+
+@router.delete("/cases/{case_id}/final-report")
+def delete_final_report(
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    doc = db.query(FinalCaseReport).filter(FinalCaseReport.case_id == case_id).first()
+    
+    if not doc:
+        raise HTTPException(status_code=404, detail="Report not found")
+        
+    c = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    
+    if doc.investigator_id != user.id and not is_admin(user):
+        raise HTTPException(status_code=403, detail="You can only delete your own report.")
+        
+    if doc.is_submitted and not is_admin(user):
+        raise HTTPException(status_code=403, detail="Cannot delete Final Case Report once it is submitted.")
+        
+    try:
+        if os.path.exists(doc.stored_path):
+            os.remove(doc.stored_path)
+    except Exception as e:
+        print("Error removing file:", e)
+        
+    db.delete(doc)
+    db.commit()
+    
+    log_audit_event(db, case_id, user.id, "Final Case Report deleted", f"Deleted Final Case Report: {doc.original_filename}")
+    
+    return {"message": "Report deleted successfully"}
