@@ -56,7 +56,7 @@ def test_investigator_tabs_navigation(driver):
     """
     login_as_investigator(driver)
     
-    tabs = ["All Cases", "Assigned Cases", "Reports", "Profile"]
+    tabs = ["All Cases", "Assigned Cases", "Reports", "Settings"]
     for tab_name in tabs:
         tab_btn = WebDriverWait(driver, 10).until(
             EC.element_to_be_clickable((By.XPATH, f"//button[contains(., '{tab_name}')] | //a[contains(., '{tab_name}')]"))

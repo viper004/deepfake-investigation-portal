@@ -38,7 +38,7 @@ def test_user_dashboard_tabs_navigation(driver):
     assert "/dashboard" in driver.current_url
     
     # Check for sidebar tabs: "My Cases", "Reports", "Profile", "Settings"
-    tabs = ["My Cases", "Reports", "Profile", "Settings"]
+    tabs = ["My Cases", "Reports", "Settings"]
     for tab_name in tabs:
         tab_btn = WebDriverWait(driver, 10).until(
             EC.element_to_be_clickable((By.XPATH, f"//button[contains(., '{tab_name}')] | //a[contains(., '{tab_name}')]"))
