@@ -543,6 +543,14 @@ function UserDashboardContent() {
   const [currentProfile, setCurrentProfile] = useState<any>(null);
   const [profileSubmitting, setProfileSubmitting] = useState(false);
 
+  // Password Change State
+  const [passwordModalOpen, setPasswordModalOpen] = useState(false);
+  const [passwordStep, setPasswordStep] = useState<"request" | "verify" | "change" | "success">("request");
+  const [passwordOtp, setPasswordOtp] = useState(["", "", "", "", "", ""]);
+  const [newPasswordForm, setNewPasswordForm] = useState({ new_password: "", confirm_password: "" });
+  const [passwordLoading, setPasswordLoading] = useState(false);
+  const [otpTimeLeft, setOtpTimeLeft] = useState(300);
+
   // Settings State
   const [settings, setSettings] = useState({ emailNotifications: true, compactMode: false, darkMode: false });
 
@@ -1848,6 +1856,110 @@ function UserDashboardContent() {
     }
   }, [activeTab, fetchReports]);
 
+  // ─── Password Change Flow ───
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (passwordModalOpen && passwordStep === "verify" && otpTimeLeft > 0) {
+      interval = setInterval(() => {
+        setOtpTimeLeft((prev) => prev - 1);
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [passwordModalOpen, passwordStep, otpTimeLeft]);
+
+  const handlePasswordRequest = async () => {
+    setPasswordLoading(true);
+    try {
+      const res = await fetch("http://127.0.0.1:8000/api/v1/user/profile/password/request", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${session.accessToken}`
+        }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setOtpTimeLeft(300);
+        setPasswordStep("verify");
+      } else {
+        showToast(data.detail || "Failed to request password change.", "error");
+      }
+    } catch (e) {
+      showToast("Network error. Please try again.", "error");
+    } finally {
+      setPasswordLoading(false);
+    }
+  };
+
+  const handlePasswordVerify = async () => {
+    const otpString = passwordOtp.join("");
+    if (otpString.length !== 6) {
+      showToast("Please enter a valid 6-digit code.", "error");
+      return;
+    }
+    setPasswordLoading(true);
+    try {
+      const res = await fetch("http://127.0.0.1:8000/api/v1/user/profile/password/verify", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.accessToken}`
+        },
+        body: JSON.stringify({ otp: otpString })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPasswordStep("change");
+      } else {
+        showToast(data.detail || "Invalid verification code.", "error");
+      }
+    } catch (e) {
+      showToast("Network error. Please try again.", "error");
+    } finally {
+      setPasswordLoading(false);
+    }
+  };
+
+  const handlePasswordChange = async () => {
+    if (newPasswordForm.new_password.length < 8) {
+      showToast("Password must be at least 8 characters long.", "error");
+      return;
+    }
+    if (newPasswordForm.new_password !== newPasswordForm.confirm_password) {
+      showToast("New passwords do not match.", "error");
+      return;
+    }
+    setPasswordLoading(true);
+    try {
+      const res = await fetch("http://127.0.0.1:8000/api/v1/user/profile/password/change", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.accessToken}`
+        },
+        body: JSON.stringify({ new_password: newPasswordForm.new_password })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPasswordStep("success");
+      } else {
+        showToast(data.detail || "Failed to change password.", "error");
+      }
+    } catch (e) {
+      showToast("Network error. Please try again.", "error");
+    } finally {
+      setPasswordLoading(false);
+    }
+  };
+
+  const closePasswordModal = () => {
+    setPasswordModalOpen(false);
+    setTimeout(() => {
+      setPasswordStep("request");
+      setPasswordOtp(["", "", "", "", "", ""]);
+      setNewPasswordForm({ new_password: "", confirm_password: "" });
+    }, 300);
+  };
+
   // ─── Profile Update ───
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2019,7 +2131,7 @@ function UserDashboardContent() {
     <div className="min-h-screen bg-[#fafafa] text-[#0a0a0a] flex flex-col" style={{ fontFamily: "Inter, system-ui, sans-serif" }}>
       
       {/* ─── Toast Notifications ─── */}
-      <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2 max-w-md w-full pointer-events-none">
+      <div className="fixed bottom-6 right-6 z-[9999] flex flex-col gap-2 max-w-md w-full pointer-events-none">
         {toasts.map((t) => (
           <div
             key={t.id}
@@ -4511,27 +4623,16 @@ function UserDashboardContent() {
                     )}
 
                     <div className="pt-4 border-t border-[#e5e5e5]">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-xs font-bold uppercase text-[#0a0a0a]/60 mb-1.5">Change Password</label>
-                          <input
-                            type="password"
-                            placeholder="•••••••• (leave blank to keep current)"
-                            value={profileForm.password}
-                            onChange={(e) => setProfileForm(prev => ({ ...prev, password: e.target.value }))}
-                            className="w-full text-sm px-3.5 py-2.5 border border-[#e5e5e5] bg-slate-50/50 rounded focus:ring-1 focus:ring-[#CC2200] outline-none"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-bold uppercase text-[#0a0a0a]/60 mb-1.5">Confirm Password</label>
-                          <input
-                            type="password"
-                            placeholder="••••••••"
-                            value={profileForm.confirm_password}
-                            onChange={(e) => setProfileForm(prev => ({ ...prev, confirm_password: e.target.value }))}
-                            className="w-full text-sm px-3.5 py-2.5 border border-[#e5e5e5] bg-slate-50/50 rounded focus:ring-1 focus:ring-[#CC2200] outline-none"
-                          />
-                        </div>
+                      <div className="mb-2">
+                        <label className="block text-xs font-bold uppercase text-[#0a0a0a]/60 mb-1.5">Change Password</label>
+                        <p className="text-sm text-[#0a0a0a]/60 mb-3">Update your account password securely.</p>
+                        <button
+                          type="button"
+                          onClick={() => setPasswordModalOpen(true)}
+                          className="px-4 py-2 border border-[#e5e5e5] rounded text-sm font-semibold text-[#0a0a0a] hover:bg-slate-50 transition-colors"
+                        >
+                          Change Password
+                        </button>
                       </div>
                     </div>
 
@@ -5679,6 +5780,173 @@ function UserDashboardContent() {
                 )}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ──────────────── PASSWORD CHANGE MODAL ──────────────── */}
+      {passwordModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in text-left">
+          <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-2xl border border-[#e5e5e5] space-y-4 animate-scale-up relative">
+            <button onClick={closePasswordModal} className="absolute top-4 right-4 text-[#0a0a0a]/50 hover:text-[#0a0a0a]">
+              <X className="h-5 w-5" />
+            </button>
+
+            {passwordStep === "request" && (
+              <>
+                <h3 className="font-bold text-lg text-[#0a0a0a] mb-2">Verify Your Identity</h3>
+                <p className="text-sm text-[#0a0a0a]/70 mb-4">
+                  For security, we'll send a verification code to your registered email address.
+                </p>
+                <div className="bg-slate-50 p-3 rounded border border-[#e5e5e5] mb-6">
+                  <p className="text-sm font-medium text-[#0a0a0a] text-center">
+                    {session?.user?.email 
+                      ? `${session.user.email.substring(0, 2)}••••••@${session.user.email.split('@')[1]}`
+                      : "your registered email"}
+                  </p>
+                </div>
+                <div className="flex flex-col gap-3">
+                  <button
+                    onClick={handlePasswordRequest}
+                    disabled={passwordLoading}
+                    className="w-full py-2.5 bg-[#CC2200] hover:bg-[#a81c00] disabled:opacity-50 text-white rounded font-bold text-sm transition-colors flex items-center justify-center gap-2"
+                  >
+                    {passwordLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+                    Send Verification Code
+                  </button>
+                  <button
+                    onClick={closePasswordModal}
+                    disabled={passwordLoading}
+                    className="w-full py-2.5 bg-white border border-[#e5e5e5] hover:bg-slate-50 disabled:opacity-50 text-[#0a0a0a] rounded font-semibold text-sm transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            )}
+
+            {passwordStep === "verify" && (
+              <>
+                <h3 className="font-bold text-lg text-[#0a0a0a] mb-2">Enter Verification Code</h3>
+                <p className="text-sm text-[#0a0a0a]/70 mb-4">
+                  Enter the 6-digit code sent to your registered email address.
+                </p>
+                <div className="flex justify-center gap-2 mb-4">
+                  {passwordOtp.map((digit, i) => (
+                    <input
+                      key={i}
+                      id={`otp-${i}`}
+                      type="text"
+                      maxLength={1}
+                      value={digit}
+                      onChange={(e) => {
+                        const val = e.target.value.replace(/[^0-9]/g, "");
+                        const newOtp = [...passwordOtp];
+                        newOtp[i] = val;
+                        setPasswordOtp(newOtp);
+                        if (val && i < 5) {
+                          document.getElementById(`otp-${i + 1}`)?.focus();
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Backspace" && !digit && i > 0) {
+                          document.getElementById(`otp-${i - 1}`)?.focus();
+                        }
+                      }}
+                      className="w-12 h-14 text-center text-xl font-bold border border-[#e5e5e5] rounded focus:ring-2 focus:ring-[#CC2200] outline-none"
+                    />
+                  ))}
+                </div>
+                <p className="text-center text-xs text-rose-600 font-medium mb-6">
+                  {otpTimeLeft > 0 ? (
+                    `Code expires in ${Math.floor(otpTimeLeft / 60).toString().padStart(2, '0')}:${(otpTimeLeft % 60).toString().padStart(2, '0')}`
+                  ) : (
+                    "Code expired"
+                  )}
+                </p>
+                <div className="flex flex-col gap-3">
+                  <button
+                    onClick={handlePasswordVerify}
+                    disabled={passwordLoading || passwordOtp.join("").length !== 6 || otpTimeLeft <= 0}
+                    className="w-full py-2.5 bg-[#CC2200] hover:bg-[#a81c00] disabled:opacity-50 text-white rounded font-bold text-sm transition-colors flex items-center justify-center gap-2"
+                  >
+                    {passwordLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+                    Verify Code
+                  </button>
+                  <button
+                    onClick={handlePasswordRequest}
+                    disabled={passwordLoading || otpTimeLeft > 240} // Allow resend after 1 min
+                    className="w-full py-2.5 bg-white text-[#CC2200] hover:bg-[#CC2200]/5 disabled:opacity-50 rounded font-semibold text-sm transition-colors"
+                  >
+                    Resend Code
+                  </button>
+                </div>
+              </>
+            )}
+
+            {passwordStep === "change" && (
+              <>
+                <h3 className="font-bold text-lg text-[#0a0a0a] mb-4">Create New Password</h3>
+                <div className="space-y-4 mb-6">
+                  <div>
+                    <label className="block text-xs font-bold uppercase text-[#0a0a0a]/60 mb-1.5">New Password</label>
+                    <input
+                      type="password"
+                      placeholder="••••••••"
+                      value={newPasswordForm.new_password}
+                      onChange={(e) => setNewPasswordForm(prev => ({ ...prev, new_password: e.target.value }))}
+                      className="w-full text-sm px-3.5 py-2.5 border border-[#e5e5e5] bg-slate-50/50 rounded focus:ring-1 focus:ring-[#CC2200] outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold uppercase text-[#0a0a0a]/60 mb-1.5">Confirm New Password</label>
+                    <input
+                      type="password"
+                      placeholder="••••••••"
+                      value={newPasswordForm.confirm_password}
+                      onChange={(e) => setNewPasswordForm(prev => ({ ...prev, confirm_password: e.target.value }))}
+                      className="w-full text-sm px-3.5 py-2.5 border border-[#e5e5e5] bg-slate-50/50 rounded focus:ring-1 focus:ring-[#CC2200] outline-none"
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-col gap-3">
+                  <button
+                    onClick={handlePasswordChange}
+                    disabled={passwordLoading || !newPasswordForm.new_password || !newPasswordForm.confirm_password}
+                    className="w-full py-2.5 bg-[#CC2200] hover:bg-[#a81c00] disabled:opacity-50 text-white rounded font-bold text-sm transition-colors flex items-center justify-center gap-2"
+                  >
+                    {passwordLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+                    Update Password
+                  </button>
+                  <button
+                    onClick={closePasswordModal}
+                    disabled={passwordLoading}
+                    className="w-full py-2.5 bg-white border border-[#e5e5e5] hover:bg-slate-50 disabled:opacity-50 text-[#0a0a0a] rounded font-semibold text-sm transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            )}
+
+            {passwordStep === "success" && (
+              <div className="text-center py-4">
+                <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-emerald-100 mb-4">
+                  <CheckCircle className="h-6 w-6 text-emerald-600" />
+                </div>
+                <h3 className="text-lg leading-6 font-bold text-slate-900 mb-2">Password Changed Successfully</h3>
+                <p className="text-sm text-slate-500 mb-6">
+                  Your password has been updated successfully.
+                </p>
+                <button
+                  type="button"
+                  onClick={closePasswordModal}
+                  className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-slate-900 text-base font-medium text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-900 sm:text-sm"
+                >
+                  Done
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

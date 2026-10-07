@@ -3737,3 +3737,110 @@ def delete_final_report(
     log_audit_event(db, case_id, user.id, "Final Case Report deleted", f"Deleted Final Case Report: {doc.original_filename}")
     
     return {"message": "Report deleted successfully"}
+
+from pydantic import BaseModel
+
+class VerifyOTPRequest(BaseModel):
+    otp: str
+
+class ChangePasswordRequest(BaseModel):
+    new_password: str
+
+@router.post("/profile/password/request")
+async def request_password_change(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.services.email_service import send_password_change_otp_email
+    from app.models.user import PasswordChangeOTP
+    import random
+    from datetime import datetime, timezone, timedelta
+    from passlib.context import CryptContext
+    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+    otp = str(random.randint(100000, 999999))
+    otp_hash = pwd_context.hash(otp)
+    
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+    
+    old_otps = db.query(PasswordChangeOTP).filter_by(user_id=current_user.id, used=False).all()
+    for o in old_otps:
+        o.used = True
+        
+    db.commit()
+    
+    new_otp = PasswordChangeOTP(
+        user_id=current_user.id,
+        otp_hash=otp_hash,
+        expires_at=expires_at,
+        attempt_count=0,
+        verified=False,
+        used=False
+    )
+    db.add(new_otp)
+    db.commit()
+    
+    await send_password_change_otp_email(current_user.email, current_user.full_name, otp)
+        
+    return {"message": "OTP sent to registered email.", "email": current_user.email}
+
+@router.post("/profile/password/verify")
+def verify_password_change_otp(request: VerifyOTPRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.models.user import PasswordChangeOTP
+    from datetime import datetime, timezone
+    from passlib.context import CryptContext
+    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+    otp_record = db.query(PasswordChangeOTP).filter_by(
+        user_id=current_user.id,
+        used=False,
+        verified=False
+    ).order_by(PasswordChangeOTP.created_at.desc()).first()
+    
+    if not otp_record:
+        raise HTTPException(status_code=400, detail="No active OTP request found.")
+        
+    if otp_record.attempt_count >= 5:
+        otp_record.used = True
+        db.commit()
+        raise HTTPException(status_code=400, detail="Too many attempts. Please request a new verification code.")
+        
+    now = datetime.now(timezone.utc)
+    expires_at = otp_record.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+        
+    if now > expires_at:
+        raise HTTPException(status_code=400, detail="Verification code has expired. Please request a new code.")
+        
+    otp_record.attempt_count += 1
+    
+    if not pwd_context.verify(request.otp, otp_record.otp_hash):
+        db.commit()
+        raise HTTPException(status_code=400, detail="Invalid verification code. Please try again.")
+        
+    otp_record.verified = True
+    db.commit()
+    
+    return {"message": "Identity verified successfully."}
+
+@router.post("/profile/password/change")
+def confirm_password_change(request: ChangePasswordRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.models.user import PasswordChangeOTP
+    from app.utils.auth import get_password_hash
+    
+    otp_record = db.query(PasswordChangeOTP).filter_by(
+        user_id=current_user.id,
+        used=False,
+        verified=True
+    ).order_by(PasswordChangeOTP.created_at.desc()).first()
+    
+    if not otp_record:
+        raise HTTPException(status_code=400, detail="Identity verification required before changing password.")
+        
+    if len(request.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long.")
+        
+    current_user.password = get_password_hash(request.new_password)
+    otp_record.used = True
+    
+    db.commit()
+    
+    return {"message": "Your password has been updated successfully."}

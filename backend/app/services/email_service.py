@@ -133,3 +133,37 @@ async def send_otp_email(email: str, otp: str):
         print(f"==========================================")
         return False
 
+async def send_password_change_otp_email(email: str, user_name: str, otp: str):
+    """
+    Sends a 6-digit OTP verification code for password change.
+    """
+    html_content = f"""
+    <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 24px; border: 1px solid #e5e5e5; border-radius: 12px; background-color: #ffffff;">
+        <h2 style="color: #0a0a0a;">Sentinel AI - Password Change Verification Code</h2>
+        <p>Hello {user_name},</p>
+        <p>Your Sentinel AI password change verification code is:</p>
+        <div style="font-size: 34px; font-weight: 800; letter-spacing: 8px; color: #CC2200; font-family: monospace; padding: 8px 0; text-align: center;">{otp}</div>
+        <p>This code will expire in 5 minutes.</p>
+        <p>If you did not request a password change, you can safely ignore this email.</p>
+        <p>Regards,<br>Sentinel AI Security Team</p>
+    </div>
+    """
+
+    message = MessageSchema(
+        subject="Sentinel AI - Password Change Verification Code",
+        recipients=[email],
+        body=html_content,
+        subtype=MessageType.html
+    )
+
+    try:
+        await fm.send_message(message)
+        return True
+    except Exception as e:
+        print(f"[Email Service] Password Change OTP send failed: {str(e)}")
+        print(f"==========================================")
+        print(f"[FALLBACK LOG] PASSWORD CHANGE OTP FOR {email}: {otp}")
+        print(f"==========================================")
+        return False
+
+
