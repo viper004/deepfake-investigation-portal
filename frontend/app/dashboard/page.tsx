@@ -2223,13 +2223,11 @@ function UserDashboardContent() {
                 { id: "Assigned Cases", label: "Assigned Cases", icon: <FolderSearch className="h-4 w-4" /> },
                 { id: "Completed Cases", label: "Completed Cases", icon: <CheckCircle className="h-4 w-4" /> },
                 { id: "Reports", label: "Reports", icon: <FileText className="h-4 w-4" /> },
-                { id: "Profile", label: "Profile", icon: <User className="h-4 w-4" /> },
                 { id: "Settings", label: "Settings", icon: <Settings className="h-4 w-4" /> },
               ] : [
                 { id: "Dashboard", label: "Dashboard", icon: <LayoutDashboard className="h-4 w-4" /> },
                 { id: "My Cases", label: "My Cases", icon: <FolderSearch className="h-4 w-4" /> },
                 { id: "Reports", label: "Reports", icon: <FileText className="h-4 w-4" /> },
-                { id: "Profile", label: "Profile", icon: <User className="h-4 w-4" /> },
                 { id: "Settings", label: "Settings", icon: <Settings className="h-4 w-4" /> },
               ]).map((item) => {
                 const isActive = activeTab === item.id;
@@ -2278,13 +2276,11 @@ function UserDashboardContent() {
                   { id: "Assigned Cases", label: "Assigned Cases", icon: <FolderSearch className="h-4 w-4" /> },
                   { id: "Completed Cases", label: "Completed Cases", icon: <CheckCircle className="h-4 w-4" /> },
                   { id: "Reports", label: "Reports", icon: <FileText className="h-4 w-4" /> },
-                  { id: "Profile", label: "Profile", icon: <User className="h-4 w-4" /> },
                   { id: "Settings", label: "Settings", icon: <Settings className="h-4 w-4" /> },
                 ] : [
                   { id: "Dashboard", label: "Dashboard", icon: <LayoutDashboard className="h-4 w-4" /> },
                   { id: "My Cases", label: "My Cases", icon: <FolderSearch className="h-4 w-4" /> },
                   { id: "Reports", label: "Reports", icon: <FileText className="h-4 w-4" /> },
-                  { id: "Profile", label: "Profile", icon: <User className="h-4 w-4" /> },
                   { id: "Settings", label: "Settings", icon: <Settings className="h-4 w-4" /> },
                 ]).map((item) => {
                   const isActive = activeTab === item.id;
