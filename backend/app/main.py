@@ -324,7 +324,7 @@ def seed_roles_and_users():
             users_to_seed = [
                 {
                     "full_name": "Alexander Pierce",
-                    "email": "alexander.pierce@sentinel.ai",
+                    "email": "alexander.pierce@aurora.ai",
                     "password": get_password_hash("password123"),
                     "phone": "+1 (555) 234-5678",
                     "organization": "Department of Homeland Security",
@@ -839,19 +839,19 @@ seed_ai_models()
 seed_investigation_cases()
 seed_synthetic_audit_logs()
 
-app = FastAPI(title="Sentinel AI API")
+app = FastAPI(title="Aurora API")
 
 @app.on_event("startup")
 def startup_load_sentinel_model():
     """
-    Load Sentinel AI V1.7-A model once on startup and keep resident in memory.
+    Load Aurora AI V1.7-A model once on startup and keep resident in memory.
     """
     try:
         from sentinel.inference import SentinelInferenceEngine
         engine = SentinelInferenceEngine.get_instance()
-        print(f"[Startup] Sentinel AI V1.7-A model loaded successfully on device: {engine.device}")
+        print(f"[Startup] Aurora AI V1.7-A model loaded successfully on device: {engine.device}")
     except Exception as e:
-        print(f"[Startup Warning] Could not preload Sentinel AI model: {e}")
+        print(f"[Startup Warning] Could not preload Aurora AI model: {e}")
 
 # Base backend directory and uploads directory setup
 BASE_BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -862,23 +862,27 @@ os.makedirs(os.path.join(UPLOAD_DIR, "reports"), exist_ok=True)
 os.makedirs(os.path.join(UPLOAD_DIR, "profiles"), exist_ok=True)
 os.makedirs(os.path.join(UPLOAD_DIR, "gov_ids"), exist_ok=True)
 
-# Mount /uploads directory to statically serve evidence and Sentinel AI analysis artifacts
+# Mount /uploads directory to statically serve evidence and Aurora AI analysis artifacts
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 # Configure CORS so frontend can call backend
+cors_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000"
+]
+if os.getenv("FRONTEND_URL"):
+    cors_origins.append(os.getenv("FRONTEND_URL").rstrip("/"))
+if os.getenv("CORS_ORIGINS"):
+    cors_origins.extend([o.strip() for o in os.getenv("CORS_ORIGINS").split(",") if o.strip()])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3001",
-        "http://localhost:3002",
-        "http://127.0.0.1:3002",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000"
-    ],
-    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:[0-9]+)?",
+    allow_origins=list(set(cors_origins)),
+    allow_origin_regex=os.getenv("CORS_ORIGIN_REGEX", r"https?://.*"),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -993,4 +997,4 @@ def send_case_message_alias(
 
 @app.get("/")
 def root():
-    return {"message": "Sentinel AI Forensic Portal API"}
+    return {"message": "Aurora Forensic Portal API"}

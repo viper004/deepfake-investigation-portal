@@ -34,7 +34,7 @@ def get_db():
 
 # OTP Helpers & Schemas
 def hash_otp(otp: str) -> str:
-    salt = "SENTINEL_AI_OTP_SALT_2026"
+    salt = "AURORA_OTP_SALT_2026"
     return hashlib.sha256((otp + salt).encode()).hexdigest()
 
 def cleanup_expired_otps(db: Session):
@@ -425,7 +425,8 @@ def register_user(
         filepath = os.path.join(PROFILES_DIR, unique_name)
         with open(filepath, "wb") as buffer:
             shutil.copyfileobj(profile_picture_file.file, buffer)
-        profile_pic_url = f"http://127.0.0.1:8000/api/v1/auth/document/profiles/{unique_name}"
+        backend_base_url = os.getenv("BACKEND_PUBLIC_URL", "http://127.0.0.1:8000").rstrip("/")
+        profile_pic_url = f"{backend_base_url}/api/v1/auth/document/profiles/{unique_name}"
     
     db_user = User(
         full_name=full_name,
@@ -504,7 +505,8 @@ def register_investigator(
     gov_id_path = os.path.join(GOV_IDS_DIR, gov_id_unique_name)
     with open(gov_id_path, "wb") as buffer:
         shutil.copyfileobj(government_id_file.file, buffer)
-    gov_id_url = f"http://127.0.0.1:8000/api/v1/auth/document/gov_ids/{gov_id_unique_name}"
+    backend_base_url = os.getenv("BACKEND_PUBLIC_URL", "http://127.0.0.1:8000").rstrip("/")
+    gov_id_url = f"{backend_base_url}/api/v1/auth/document/gov_ids/{gov_id_unique_name}"
     
     # Save Profile Picture
     profile_pic_url = None
@@ -514,7 +516,7 @@ def register_investigator(
         prof_path = os.path.join(PROFILES_DIR, prof_unique_name)
         with open(prof_path, "wb") as buffer:
             shutil.copyfileobj(profile_picture_file.file, buffer)
-        profile_pic_url = f"http://127.0.0.1:8000/api/v1/auth/document/profiles/{prof_unique_name}"
+        profile_pic_url = f"{backend_base_url}/api/v1/auth/document/profiles/{prof_unique_name}"
     
     if existing_user:
         db_user = existing_user

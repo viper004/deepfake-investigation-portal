@@ -724,7 +724,7 @@ export default function InvestigatorCaseWorkspacePage() {
         setScanProgress(100);
         setIsScanning(false);
         setScanResult(data);
-        showToast("Sentinel AI Forensic Scan completed successfully!", "success");
+        showToast("Aurora Forensic Scan completed successfully!", "success");
         fetchCaseDetail();
       } else {
         setIsScanning(false);
@@ -907,10 +907,10 @@ export default function InvestigatorCaseWorkspacePage() {
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2 cursor-pointer" onClick={() => router.push("/dashboard")}>
             <div className="w-8 h-8 rounded bg-[#CC2200] flex items-center justify-center font-bold text-white tracking-widest text-sm">
-              S
+              A
             </div>
             <div>
-              <span className="font-extrabold text-sm tracking-wider text-white">SENTINEL AI</span>
+              <span className="font-extrabold text-sm tracking-wider text-white">AURORA</span>
               <span className="block text-[9px] font-bold text-[#CC2200] uppercase tracking-widest -mt-1">
                 Forensic Workspace
               </span>
@@ -1276,7 +1276,7 @@ export default function InvestigatorCaseWorkspacePage() {
                   <div className="bg-slate-900 text-white rounded-xl p-6 space-y-4 shadow-inner text-center animate-pulse">
                     <div className="flex items-center justify-center gap-2 text-xs font-bold tracking-widest text-[#CC2200] uppercase">
                       <Sparkles className="h-4 w-4 animate-spin" />
-                      Sentinel AI Forensic Analysis
+                      Aurora Forensic Analysis
                     </div>
                     <p className="text-sm font-medium text-slate-300">Analyzing submitted evidence</p>
 
@@ -1308,7 +1308,7 @@ export default function InvestigatorCaseWorkspacePage() {
                         </div>
                       </div>
                       <span className="text-[10px] font-bold px-2.5 py-1 rounded bg-purple-100 text-purple-800 border border-purple-200">
-                        Sentinel AI V1.7-A Dual-Head
+                        Aurora AI V1.7-A Dual-Head
                       </span>
                     </div>
 
@@ -1490,7 +1490,7 @@ export default function InvestigatorCaseWorkspacePage() {
                     <div className="space-y-1">
                       <h4 className="text-sm font-bold text-slate-900">AI Forensic Analysis</h4>
                       <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
-                        No forensic scan has been performed for this case. Sentinel AI will analyze all submitted evidence and generate a structured forensic analysis report.
+                        No forensic scan has been performed for this case. Aurora will analyze all submitted evidence and generate a structured forensic analysis report.
                       </p>
                     </div>
 

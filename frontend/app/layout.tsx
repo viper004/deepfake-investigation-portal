@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Sentinel AI — Deepfake Investigation Portal",
+  title: "Aurora — Deepfake Investigation Portal",
   description: "AI-powered deepfake detection and investigation platform for media authenticity verification",
 };
 

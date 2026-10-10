@@ -1110,7 +1110,7 @@ export default function AdminDashboard() {
       <div className="min-h-screen bg-[#fafafa] flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           <Loader2 className="h-8 w-8 animate-spin text-[#CC2200]" />
-          <p className="text-sm font-medium text-[#0a0a0a]/50">Loading Sentinel AI Admin portal...</p>
+          <p className="text-sm font-medium text-[#0a0a0a]/50">Loading Aurora Admin portal...</p>
         </div>
       </div>
     );
@@ -1158,7 +1158,7 @@ export default function AdminDashboard() {
               <div className="w-8 h-8 bg-[#CC2200] rounded flex items-center justify-center shadow-md">
                 <ShieldAlert className="h-5 w-5 text-white" />
               </div>
-              <span className="font-bold text-lg tracking-tight">Sentinel AI Admin</span>
+              <span className="font-bold text-lg tracking-tight">Aurora Admin</span>
             </div>
             
             <div className="flex items-center gap-4">
@@ -1806,7 +1806,7 @@ export default function AdminDashboard() {
                       <div>
                         <div className="text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/40">Active Inference Engine</div>
                         <div className="text-lg font-black text-[#0a0a0a] mt-0.5">
-                          {overviewData?.ai_model_status?.model_name || "Sentinel Risk Engine v2.1"}
+                          {overviewData?.ai_model_status?.model_name || "Aurora Risk Engine v2.1"}
                         </div>
                         <div className="text-xs text-[#0a0a0a]/60 mt-1 flex items-center gap-3">
                           <span>Uptime: <strong className="text-emerald-600 font-bold">{overviewData?.ai_model_status?.uptime || "99.9%"}</strong></span>
@@ -3188,7 +3188,7 @@ export default function AdminDashboard() {
                       <option value="Admin">Admin</option>
                       <option value="Investigator">Investigator</option>
                       <option value="User">User</option>
-                      <option value="Sentinel AI">Sentinel AI</option>
+                      <option value="Aurora">Aurora</option>
                     </select>
                   </div>
 

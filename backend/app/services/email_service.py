@@ -27,7 +27,8 @@ async def send_investigator_invitation_email(email: EmailStr, full_name: str, to
     """
     Sends an invitation email to a new investigator and logs it in the database.
     """
-    registration_link = f"http://localhost:3000/register?token={token}"
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
+    registration_link = f"{frontend_url}/register?token={token}"
     
     html_content = f"""
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e5e5e5; border-radius: 8px;">

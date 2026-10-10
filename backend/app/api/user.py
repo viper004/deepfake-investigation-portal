@@ -1811,7 +1811,7 @@ def get_user_analyses(
             "id": a.id,
             "evidence_id": a.evidence_id,
             "file_name": a.evidence.original_name,
-            "model_name": a.model.model_name if a.model else "Sentinel AI V1.7-A",
+            "model_name": a.model.model_name if a.model else "Aurora AI V1.7-A",
             "version": a.model_version or (a.model.version if a.model else "V1.7-A"),
             "result": a.result.value,
             "confidence_score": a.confidence_score,
@@ -2026,13 +2026,14 @@ def update_profile(
     if password and password.strip():
         user.password = get_password_hash(password)
         
+    backend_base_url = os.getenv("BACKEND_PUBLIC_URL", "http://127.0.0.1:8000").rstrip("/")
     if profile_picture_file and profile_picture_file.filename:
         os.makedirs(os.path.join(UPLOAD_DIR, "profiles"), exist_ok=True)
         unique_name = f"{uuid.uuid4().hex}_{profile_picture_file.filename}"
         filepath = os.path.join(UPLOAD_DIR, "profiles", unique_name)
         with open(filepath, "wb") as buffer:
             shutil.copyfileobj(profile_picture_file.file, buffer)
-        user.profile_picture = f"http://127.0.0.1:8000/api/v1/auth/document/profiles/{unique_name}"
+        user.profile_picture = f"{backend_base_url}/api/v1/auth/document/profiles/{unique_name}"
 
     if digital_id_file and digital_id_file.filename:
         os.makedirs(os.path.join(UPLOAD_DIR, "digital_ids"), exist_ok=True)
@@ -2040,7 +2041,7 @@ def update_profile(
         filepath = os.path.join(UPLOAD_DIR, "digital_ids", unique_name)
         with open(filepath, "wb") as buffer:
             shutil.copyfileobj(digital_id_file.file, buffer)
-        user.digital_id_path = f"http://127.0.0.1:8000/api/v1/auth/document/digital_ids/{unique_name}"
+        user.digital_id_path = f"{backend_base_url}/api/v1/auth/document/digital_ids/{unique_name}"
 
     db.commit()
     db.refresh(user)
@@ -2737,15 +2738,15 @@ def analyze_investigation_endpoint(
         raise HTTPException(status_code=400, detail="No evidence files uploaded for this case to analyze.")
 
     log_audit_event(
-        db, c.id, user.id, "Sentinel AI Analysis Initiated",
-        f"Sentinel AI V1.7-A dual-head analysis initiated on {len(evidence_files)} evidence files."
+        db, c.id, user.id, "Aurora Analysis Initiated",
+        f"Aurora AI V1.7-A dual-head analysis initiated on {len(evidence_files)} evidence files."
     )
 
     result_data = analyze_investigation_evidence(c, evidence_files, db, user)
 
     log_audit_event(
-        db, c.id, user.id, "Sentinel AI Analysis Completed",
-        f"Sentinel AI V1.7-A dual-head analysis completed for case {c.case_number}."
+        db, c.id, user.id, "Aurora Analysis Completed",
+        f"Aurora AI V1.7-A dual-head analysis completed for case {c.case_number}."
     )
 
     return result_data
@@ -2787,7 +2788,7 @@ def trigger_forensic_scan(
     if not evidence_files:
         raise HTTPException(status_code=400, detail="No evidence files uploaded for this case to analyze.")
 
-    # Call real Sentinel AI V1.7-A inference engine
+    # Call real Aurora AI V1.7-A inference engine
     res = analyze_investigation_evidence(c, evidence_files, db, user)
 
     scan_id = res.get("scan_id")
@@ -2938,7 +2939,7 @@ def download_forensic_pdf_report(
         # Log audit event
         log_audit_event(
             db, c.id, user.id, "Forensic PDF Report Generated",
-            f"Official Sentinel AI Forensic PDF report generated for case {c.case_number}."
+            f"Official Aurora Forensic PDF report generated for case {c.case_number}."
         )
 
     filename = os.path.basename(abs_path)

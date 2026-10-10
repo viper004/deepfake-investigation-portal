@@ -851,7 +851,7 @@ def get_overview_stats(
         "case_status_distribution": case_status_distribution,
         "case_priority_distribution": case_priority_distribution,
         "ai_model_status": {
-            "model_name": "Sentinel Risk Engine v2.1",
+            "model_name": "Aurora Risk Engine v2.1",
             "status": "Healthy",
             "status_badge": "Operational",
             "uptime": "99.9%",

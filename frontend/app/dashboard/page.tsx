@@ -1870,7 +1870,7 @@ function UserDashboardContent() {
   const handlePasswordRequest = async () => {
     setPasswordLoading(true);
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/v1/user/profile/password/request", {
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/profile/password/request`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${session.accessToken}`
@@ -1898,7 +1898,7 @@ function UserDashboardContent() {
     }
     setPasswordLoading(true);
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/v1/user/profile/password/verify", {
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/profile/password/verify`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1930,7 +1930,7 @@ function UserDashboardContent() {
     }
     setPasswordLoading(true);
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/v1/user/profile/password/change", {
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/profile/password/change`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -2185,7 +2185,7 @@ function UserDashboardContent() {
                 <div className="w-8 h-8 bg-[#CC2200] rounded flex items-center justify-center shadow-md">
                   <ShieldAlert className="h-5 w-5 text-white" />
                 </div>
-                <span className="font-bold text-lg tracking-tight">Sentinel AI Portal</span>
+                <span className="font-bold text-lg tracking-tight">Aurora Portal</span>
               </div>
             </div>
 
@@ -3350,7 +3350,7 @@ function UserDashboardContent() {
                           <div className="bg-slate-900 text-white rounded-lg p-6 space-y-4 shadow-inner text-center animate-pulse">
                             <div className="flex items-center justify-center gap-2 text-xs font-bold tracking-widest text-[#CC2200] uppercase">
                               <Sparkles className="h-4 w-4 animate-spin" />
-                              Sentinel AI Forensic Analysis
+                              Aurora Forensic Analysis
                             </div>
                             <p className="text-sm font-medium text-slate-300">Analyzing submitted evidence</p>
 
@@ -3382,7 +3382,7 @@ function UserDashboardContent() {
                                 </div>
                               </div>
                               <span className="text-[10px] font-bold px-2.5 py-1 rounded bg-purple-100 text-purple-800 border border-purple-200">
-                                Sentinel AI V1.7-A Dual-Head
+                                Aurora AI V1.7-A Dual-Head
                               </span>
                             </div>
 
@@ -3531,7 +3531,7 @@ function UserDashboardContent() {
                             <div className="space-y-1">
                               <h4 className="text-sm font-bold text-slate-900">AI Forensic Analysis</h4>
                               <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
-                                No forensic scan has been performed for this case. Sentinel AI will analyze all submitted evidence and generate a structured forensic analysis report.
+                                No forensic scan has been performed for this case. Aurora will analyze all submitted evidence and generate a structured forensic analysis report.
                               </p>
                             </div>
 
@@ -4725,7 +4725,7 @@ function UserDashboardContent() {
       {/* ─── Footer ─── */}
       <footer className="border-t border-[#e5e5e5] bg-white py-6 mt-auto">
         <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 text-center text-xs text-[#0a0a0a]/40">
-          © {new Date().getFullYear()} Sentinel AI. Confident deepfake detection forensic workflows.
+          © {new Date().getFullYear()} Aurora. Confident deepfake detection forensic workflows.
         </div>
       </footer>
 
