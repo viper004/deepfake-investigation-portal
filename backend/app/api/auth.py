@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Form, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, status, Form, File, UploadFile, BackgroundTasks
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import func, text
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 import os
@@ -53,7 +54,7 @@ class VerifyOTPRequestSchema(BaseModel):
     otp: str
 
 @router.post("/send-email-otp")
-async def send_email_otp(data: OTPRequestSchema, db: Session = Depends(get_db)):
+async def send_email_otp(data: OTPRequestSchema, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     email = data.email.strip().lower()
     
     # 1. Validate email format
@@ -75,17 +76,16 @@ async def send_email_otp(data: OTPRequestSchema, db: Session = Depends(get_db)):
     # 3. Cleanup expired OTPs
     cleanup_expired_otps(db)
 
-    # 4. Check rate limit: Maximum 3 OTP requests per hour for the same email
-    one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+    # 4. Check rate limit: Maximum 5 OTP requests per 15 minutes for the same email
     recent_requests = db.query(EmailVerification).filter(
         EmailVerification.email == email,
-        EmailVerification.created_at >= one_hour_ago
+        EmailVerification.created_at >= func.date_sub(func.now(), text("INTERVAL 15 MINUTE"))
     ).count()
 
-    if recent_requests >= 3:
+    if recent_requests >= 5:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Maximum 3 OTP requests allowed per hour. Please try again later."
+            detail="Maximum 5 OTP requests allowed per 15 minutes. Please try again later."
         )
 
     # Invalidate previous unverified OTPs for this email
@@ -111,8 +111,8 @@ async def send_email_otp(data: OTPRequestSchema, db: Session = Depends(get_db)):
     db.add(verification_entry)
     db.commit()
 
-    # 7. Send OTP email
-    await send_otp_email(email, otp_code)
+    # 7. Send OTP email in background
+    background_tasks.add_task(send_otp_email, email, otp_code)
 
     return {"message": "Verification code sent to your email."}
 
@@ -171,8 +171,8 @@ def verify_email_otp(data: VerifyOTPRequestSchema, db: Session = Depends(get_db)
         )
 
 @router.post("/resend-email-otp")
-async def resend_email_otp(data: OTPRequestSchema, db: Session = Depends(get_db)):
-    return await send_email_otp(data, db)
+async def resend_email_otp(data: OTPRequestSchema, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    return await send_email_otp(data, background_tasks, db)
 
 # ──────────────── FORGOT PASSWORD ENDPOINTS ────────────────
 
@@ -190,7 +190,7 @@ class ResetPasswordSchema(BaseModel):
     confirm_password: str
 
 @router.post("/forgot-password/request")
-async def forgot_password_request(data: ForgotPasswordRequestSchema, db: Session = Depends(get_db)):
+async def forgot_password_request(data: ForgotPasswordRequestSchema, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     email = data.email.strip().lower()
     
     # 1. Validate email format
@@ -212,17 +212,16 @@ async def forgot_password_request(data: ForgotPasswordRequestSchema, db: Session
     # 3. Cleanup expired OTPs
     cleanup_expired_otps(db)
 
-    # 4. Check rate limit: Maximum 3 OTP requests per hour for the same email
-    one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+    # 4. Check rate limit: Maximum 5 OTP requests per 15 minutes for the same email
     recent_requests = db.query(PasswordResetOTP).filter(
         PasswordResetOTP.email == email,
-        PasswordResetOTP.created_at >= one_hour_ago
+        PasswordResetOTP.created_at >= func.date_sub(func.now(), text("INTERVAL 15 MINUTE"))
     ).count()
 
-    if recent_requests >= 3:
+    if recent_requests >= 5:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Maximum 3 password reset attempts allowed per hour. Please try again later."
+            detail="Maximum 5 password reset attempts allowed per 15 minutes. Please try again later."
         )
 
     # Invalidate previous unused reset records for this email
@@ -249,8 +248,8 @@ async def forgot_password_request(data: ForgotPasswordRequestSchema, db: Session
     db.add(reset_record)
     db.commit()
 
-    # 7. Send OTP email
-    await send_otp_email(email, otp_code)
+    # 7. Send OTP email in background so the UI doesn't buffer/freeze
+    background_tasks.add_task(send_otp_email, email, otp_code)
 
     return {"message": "If an account exists with this email address, a verification code has been sent."}
 
@@ -315,8 +314,8 @@ def forgot_password_verify_otp(data: VerifyResetOTPRequestSchema, db: Session = 
         )
 
 @router.post("/forgot-password/resend-otp")
-async def forgot_password_resend_otp(data: ForgotPasswordRequestSchema, db: Session = Depends(get_db)):
-    return await forgot_password_request(data, db)
+async def forgot_password_resend_otp(data: ForgotPasswordRequestSchema, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    return await forgot_password_request(data, background_tasks, db)
 
 @router.post("/forgot-password/reset-password")
 def forgot_password_reset(data: ResetPasswordSchema, db: Session = Depends(get_db)):

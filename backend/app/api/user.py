@@ -4,7 +4,7 @@ import shutil
 import hashlib
 from datetime import datetime, timezone
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, status, Header, UploadFile, File, Form, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Header, UploadFile, File, Form, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, desc, text, and_
 from jose import jwt, JWTError
@@ -3748,7 +3748,7 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 @router.post("/profile/password/request")
-async def request_password_change(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+async def request_password_change(background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.services.email_service import send_password_change_otp_email
     from app.models.user import PasswordChangeOTP
     import random
@@ -3778,7 +3778,7 @@ async def request_password_change(db: Session = Depends(get_db), current_user: U
     db.add(new_otp)
     db.commit()
     
-    await send_password_change_otp_email(current_user.email, current_user.full_name, otp)
+    background_tasks.add_task(send_password_change_otp_email, current_user.email, current_user.full_name, otp)
         
     return {"message": "OTP sent to registered email.", "email": current_user.email}
 

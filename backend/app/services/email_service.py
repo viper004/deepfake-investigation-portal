@@ -13,12 +13,13 @@ conf = ConnectionConfig(
     MAIL_PASSWORD=os.getenv("SMTP_PASSWORD", ""),
     MAIL_FROM=os.getenv("MAIL_FROM", "no-reply@sentinel.ai"),
     MAIL_PORT=int(os.getenv("SMTP_PORT", 587)),
-    MAIL_SERVER=os.getenv("SMTP_HOST", "smtp.mailtrap.io"),
+    MAIL_SERVER=os.getenv("SMTP_HOST", "smtp.gmail.com"),
     MAIL_FROM_NAME=os.getenv("MAIL_FROM_NAME", "Sentinel AI Investigation Platform"),
     MAIL_STARTTLS=os.getenv("SMTP_TLS", "True").lower() == "true",
     MAIL_SSL_TLS=os.getenv("SMTP_SSL", "False").lower() == "true",
     USE_CREDENTIALS=True,
-    VALIDATE_CERTS=True
+    VALIDATE_CERTS=True,
+    TIMEOUT=15
 )
 
 fm = FastMail(conf)
@@ -99,6 +100,10 @@ async def send_otp_email(email: str, otp: str):
     """
     Sends a 6-digit OTP verification code to the specified email address.
     """
+    print(f"==========================================")
+    print(f"[OTP SERVICE] GENERATED OTP FOR {email}: {otp}")
+    print(f"==========================================")
+
     html_content = f"""
     <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 24px; border: 1px solid #e5e5e5; border-radius: 12px; background-color: #ffffff;">
         <div style="text-align: center; margin-bottom: 24px;">
@@ -108,7 +113,7 @@ async def send_otp_email(email: str, otp: str):
         <div style="background-color: #fafafa; border: 1px solid #eaeaea; border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 24px;">
             <p style="font-size: 13px; color: #444; margin-bottom: 12px; font-weight: 500;">Your 6-digit verification code is:</p>
             <div style="font-size: 34px; font-weight: 800; letter-spacing: 8px; color: #CC2200; font-family: monospace; padding: 8px 0;">{otp}</div>
-            <p style="font-size: 12px; color: #888; margin-top: 12px;">This code will expire in <strong>5 minutes</strong>.</p>
+            <p style="font-size: 12px; color: #888; margin-top: 12px;">This code will expire in <strong>10 minutes</strong>.</p>
         </div>
         <p style="font-size: 12px; color: #666; line-height: 1.5;">If you did not request this verification code, please ignore this email.</p>
         <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 20px 0;" />
