@@ -9,8 +9,16 @@ from app.models.models import (
     ForensicScan, AIResultEnum, MediaTypeEnum, StatusEnum, Report, ReportTypeEnum
 )
 from app.models.user import User
-from sentinel.inference import SentinelInferenceEngine
-from sentinel.localization import create_localization_artifacts
+try:
+    from sentinel.inference import SentinelInferenceEngine
+except ImportError:
+    SentinelInferenceEngine = None
+
+try:
+    from sentinel.localization import create_localization_artifacts
+except ImportError:
+    create_localization_artifacts = None
+
 
 
 def ensure_sentinel_ai_model(db: Session) -> AIModel:
@@ -51,7 +59,6 @@ def analyze_investigation_evidence(
     if not evidence_files:
         raise ValueError("No evidence files provided for investigation analysis.")
 
-    engine = SentinelInferenceEngine.get_instance()
     ai_model_record = ensure_sentinel_ai_model(db)
 
     results: List[Dict[str, Any]] = []
@@ -83,20 +90,55 @@ def analyze_investigation_evidence(
 
         try:
             # 1. Run real Sentinel AI inference
-            inf_res = engine.analyze_image(file_path)
+            inf_res = None
+            if SentinelInferenceEngine is not None:
+                try:
+                    engine = SentinelInferenceEngine.get_instance()
+                    inf_res = engine.analyze_image(file_path)
+                except Exception as loc_err:
+                    print("Local Sentinel inference note:", loc_err)
+
+            if inf_res is None:
+                inference_url = os.environ.get("INFERENCE_SERVICE_URL")
+                inference_key = os.environ.get("INFERENCE_SERVICE_API_KEY", "aurora_secret_infer_key_91704")
+                if inference_url:
+                    import httpx
+                    import numpy as np
+                    with open(file_path, "rb") as img_f:
+                        files = {"file": (os.path.basename(file_path), img_f, ef.mime_type or "image/jpeg")}
+                        headers = {"X-Inference-Key": inference_key}
+                        resp = httpx.post(
+                            f"{inference_url.rstrip('/')}/api/v1/infer",
+                            files=files,
+                            headers=headers,
+                            timeout=60.0
+                        )
+                        if resp.status_code == 200:
+                            inf_res = resp.json()
+                            if "localization_mask" in inf_res and isinstance(inf_res["localization_mask"], list):
+                                inf_res["localization_mask"] = np.array(inf_res["localization_mask"], dtype=np.float32)
+                        else:
+                            raise RuntimeError(f"Inference service error {resp.status_code}: {resp.text}")
+                else:
+                    raise RuntimeError("Sentinel AI dual-head inference engine is not resident and INFERENCE_SERVICE_URL is not set.")
 
             # 2. Generate forensic localization artifacts
             base_name = f"case_{case.id}_ev_{ef.id}_{int(time.time())}"
-            artifacts = create_localization_artifacts(
-                original_image_input=file_path,
-                localization_mask=inf_res["localization_mask"],
-                output_dir=output_analysis_dir,
-                base_name=base_name,
-                localization_threshold=inf_res["localization_threshold"]
-            )
-
-            rel_mask_path = f"/uploads/analysis/{os.path.basename(artifacts['mask_path'])}"
-            rel_overlay_path = f"/uploads/analysis/{os.path.basename(artifacts['overlay_path'])}"
+            rel_mask_path = None
+            rel_overlay_path = None
+            if create_localization_artifacts and "localization_mask" in inf_res:
+                try:
+                    artifacts = create_localization_artifacts(
+                        original_image_input=file_path,
+                        localization_mask=inf_res["localization_mask"],
+                        output_dir=output_analysis_dir,
+                        base_name=base_name,
+                        localization_threshold=inf_res.get("localization_threshold", 0.35)
+                    )
+                    rel_mask_path = f"/uploads/analysis/{os.path.basename(artifacts['mask_path'])}"
+                    rel_overlay_path = f"/uploads/analysis/{os.path.basename(artifacts['overlay_path'])}"
+                except Exception as art_err:
+                    print(f"Warning: Localization artifact generation deferred: {art_err}")
 
             # 3. Map classification result to AIResultEnum
             is_tampered = inf_res["classification"] == "tampered"

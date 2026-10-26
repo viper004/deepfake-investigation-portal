@@ -52,8 +52,7 @@ import {
   Film
 } from "lucide-react";
 import WorkspaceSwitcher from "@/components/WorkspaceSwitcher";
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
+import { BACKEND_URL } from "@/lib/config";
 
 interface ToastType {
   id: string;
@@ -539,9 +538,19 @@ function UserDashboardContent() {
   // Profile Form state
   const [profileForm, setProfileForm] = useState({ full_name: "", phone: "", organization: "", password: "", confirm_password: "", date_of_birth: "", gender: "", address: "" });
   const [profilePicFile, setProfilePicFile] = useState<File | null>(null);
+  const [profilePicPreview, setProfilePicPreview] = useState<string | null>(null);
   const [digitalIdFile, setDigitalIdFile] = useState<File | null>(null);
   const [currentProfile, setCurrentProfile] = useState<any>(null);
   const [profileSubmitting, setProfileSubmitting] = useState(false);
+
+  const getSafeProfilePicUrl = (url?: string | null) => {
+    if (!url) return null;
+    if (url.startsWith("blob:") || url.startsWith("data:")) return url;
+    if (url.includes("/api/v1/auth/document/profiles/")) {
+      return "/api/v1/auth/document/profiles/" + url.split("/api/v1/auth/document/profiles/").pop();
+    }
+    return url;
+  };
 
   // Password Change State
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
@@ -1991,9 +2000,14 @@ function UserDashboardContent() {
       });
 
       if (res.ok) {
+        const data = await res.json().catch(() => null);
+        if (data?.user) {
+          setCurrentProfile((prev: any) => ({ ...prev, ...data.user }));
+        }
         showToast("Profile updated successfully.", "success");
         setProfileForm(prev => ({ ...prev, password: "", confirm_password: "" }));
         setProfilePicFile(null);
+        setProfilePicPreview(null);
         setDigitalIdFile(null);
         fetchProfile();
       } else {
@@ -2256,34 +2270,48 @@ function UserDashboardContent() {
                   onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
                   className="flex items-center gap-2 p-1 rounded-full hover:bg-slate-100 transition-colors"
                 >
-                  {(currentProfile?.profile_picture || session?.user?.image || (session?.user as any)?.profile_picture) ? (
+                  {getSafeProfilePicUrl(profilePicPreview || currentProfile?.profile_picture || session?.user?.image || (session?.user as any)?.profile_picture) ? (
                     <img
-                      src={currentProfile?.profile_picture || session?.user?.image || (session?.user as any)?.profile_picture}
+                      src={getSafeProfilePicUrl(profilePicPreview || currentProfile?.profile_picture || session?.user?.image || (session?.user as any)?.profile_picture)!}
                       alt={session?.user?.name || "Profile"}
                       className="w-8 h-8 rounded-full object-cover border border-[#e5e5e5] shadow-sm flex-shrink-0"
+                      onError={(e) => {
+                        (e.currentTarget as HTMLElement).style.display = "none";
+                        const fallback = e.currentTarget.nextElementSibling as HTMLElement;
+                        if (fallback) fallback.style.display = "flex";
+                      }}
                     />
-                  ) : (
-                    <div className="w-8 h-8 rounded-full bg-[#CC2200] text-white flex items-center justify-center font-bold text-sm shadow-sm">
-                      {session?.user?.name?.[0].toUpperCase() || "I"}
-                    </div>
-                  )}
+                  ) : null}
+                  <div
+                    style={{ display: getSafeProfilePicUrl(profilePicPreview || currentProfile?.profile_picture || session?.user?.image || (session?.user as any)?.profile_picture) ? "none" : "flex" }}
+                    className="w-8 h-8 rounded-full bg-[#CC2200] text-white items-center justify-center font-bold text-sm shadow-sm"
+                  >
+                    {session?.user?.name?.[0]?.toUpperCase() || "I"}
+                  </div>
                   <ChevronDown className="h-4 w-4 text-[#0a0a0a]/60" />
                 </button>
 
                 {profileDropdownOpen && (
                   <div className="absolute right-0 mt-2 w-52 bg-white border border-[#e5e5e5] rounded-lg shadow-lg z-50 py-1 animate-slide-in">
                     <div className="px-4 py-2.5 border-b border-[#e5e5e5] flex items-center gap-3 text-left">
-                      {(currentProfile?.profile_picture || session?.user?.image || (session?.user as any)?.profile_picture) ? (
+                      {getSafeProfilePicUrl(profilePicPreview || currentProfile?.profile_picture || session?.user?.image || (session?.user as any)?.profile_picture) ? (
                         <img
-                          src={currentProfile?.profile_picture || session?.user?.image || (session?.user as any)?.profile_picture}
+                          src={getSafeProfilePicUrl(profilePicPreview || currentProfile?.profile_picture || session?.user?.image || (session?.user as any)?.profile_picture)!}
                           alt="Profile"
                           className="w-9 h-9 rounded-full object-cover border border-[#e5e5e5] shadow-xs flex-shrink-0"
+                          onError={(e) => {
+                            (e.currentTarget as HTMLElement).style.display = "none";
+                            const fallback = e.currentTarget.nextElementSibling as HTMLElement;
+                            if (fallback) fallback.style.display = "flex";
+                          }}
                         />
-                      ) : (
-                        <div className="w-9 h-9 rounded-full bg-[#CC2200] text-white flex items-center justify-center font-bold text-sm shadow-xs flex-shrink-0">
-                          {session?.user?.name?.[0].toUpperCase() || "I"}
-                        </div>
-                      )}
+                      ) : null}
+                      <div
+                        style={{ display: getSafeProfilePicUrl(profilePicPreview || currentProfile?.profile_picture || session?.user?.image || (session?.user as any)?.profile_picture) ? "none" : "flex" }}
+                        className="w-9 h-9 rounded-full bg-[#CC2200] text-white items-center justify-center font-bold text-sm shadow-xs flex-shrink-0"
+                      >
+                        {session?.user?.name?.[0]?.toUpperCase() || "I"}
+                      </div>
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-bold text-[#0a0a0a] truncate">{session?.user?.name || currentProfile?.full_name}</p>
                         <p className="text-xs text-[#0a0a0a]/50 truncate">{session?.user?.email || currentProfile?.email}</p>
@@ -2304,7 +2332,7 @@ function UserDashboardContent() {
                       Portal Settings
                     </button>
                     <button
-                      onClick={() => signOut({ callbackUrl: "/" })}
+                      onClick={() => signOut({ callbackUrl: typeof window !== "undefined" ? window.location.origin : "/" })}
                       className="w-full text-left px-4 py-2 text-sm text-rose-600 hover:bg-rose-50 transition-colors border-t border-[#e5e5e5] flex items-center gap-2"
                     >
                       <LogOut className="h-4 w-4" />
@@ -2360,7 +2388,7 @@ function UserDashboardContent() {
               })}
               
               <button
-                onClick={() => signOut({ callbackUrl: "/" })}
+                onClick={() => signOut({ callbackUrl: typeof window !== "undefined" ? window.location.origin : "/" })}
                 className="w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-semibold text-rose-600 hover:bg-rose-50 transition-colors border-t border-[#e5e5e5] mt-4"
               >
                 <LogOut className="h-4 w-4" />
@@ -4487,11 +4515,24 @@ function UserDashboardContent() {
                 {/* Profile Card left */}
                 <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-sm p-6 text-center space-y-4 flex flex-col items-center justify-center">
                   <div className="relative w-24 h-24 rounded-full bg-[#CC2200]/10 border border-[#CC2200]/20 flex items-center justify-center font-bold text-3xl text-[#CC2200] shadow-sm overflow-hidden">
-                    {currentProfile?.profile_picture ? (
-                      <img src={currentProfile.profile_picture} alt="Profile" className="object-cover w-full h-full" />
-                    ) : (
-                      session?.user?.name?.[0].toUpperCase()
-                    )}
+                    {getSafeProfilePicUrl(profilePicPreview || currentProfile?.profile_picture || session?.user?.image || (session?.user as any)?.profile_picture) ? (
+                      <img
+                        src={getSafeProfilePicUrl(profilePicPreview || currentProfile?.profile_picture || session?.user?.image || (session?.user as any)?.profile_picture)!}
+                        alt="Profile"
+                        className="object-cover w-full h-full"
+                        onError={(e) => {
+                          (e.currentTarget as HTMLElement).style.display = "none";
+                          const fallback = e.currentTarget.nextElementSibling as HTMLElement;
+                          if (fallback) fallback.style.display = "flex";
+                        }}
+                      />
+                    ) : null}
+                    <div
+                      style={{ display: getSafeProfilePicUrl(profilePicPreview || currentProfile?.profile_picture || session?.user?.image || (session?.user as any)?.profile_picture) ? "none" : "flex" }}
+                      className="w-full h-full items-center justify-center font-bold text-3xl text-[#CC2200]"
+                    >
+                      {session?.user?.name?.[0]?.toUpperCase() || "I"}
+                    </div>
                   </div>
                   <div>
                     <h2 className="font-bold text-lg text-[#0a0a0a]">{session?.user?.name}</h2>
@@ -4543,6 +4584,26 @@ function UserDashboardContent() {
                       </div>
                     </div>
 
+                    {/* Common Profile Picture upload field for all users & investigators */}
+                    <div className="p-4 bg-slate-50 border border-[#e5e5e5] rounded-md">
+                      <label className="block text-xs font-bold uppercase text-[#0a0a0a]/70 mb-1.5">Update Profile Picture</label>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0] || null;
+                          setProfilePicFile(file);
+                          setProfilePicPreview(file ? URL.createObjectURL(file) : null);
+                        }}
+                        className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-[#CC2200]/10 file:text-[#CC2200] hover:file:bg-[#CC2200]/20"
+                      />
+                      {profilePicFile && (
+                        <p className="text-xs text-emerald-600 font-medium mt-1.5">
+                          Selected: {profilePicFile.name} (preview updated above)
+                        </p>
+                      )}
+                    </div>
+
                     {isInvestigator ? (
                       <div>
                         <label className="block text-xs font-bold uppercase text-[#0a0a0a]/60 mb-1.5">Organization / Agency</label>
@@ -4592,32 +4653,21 @@ function UserDashboardContent() {
                           />
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-xs font-bold uppercase text-[#0a0a0a]/60 mb-1.5">Profile Picture</label>
-                            <input
-                              type="file"
-                              accept="image/*"
-                              onChange={(e) => setProfilePicFile(e.target.files?.[0] || null)}
-                              className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-[#CC2200]/10 file:text-[#CC2200] hover:file:bg-[#CC2200]/20"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-xs font-bold uppercase text-[#0a0a0a]/60 mb-1.5">Digital ID Card</label>
-                            <input
-                              type="file"
-                              accept=".jpg,.jpeg,.png,.pdf"
-                              onChange={(e) => setDigitalIdFile(e.target.files?.[0] || null)}
-                              className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-[#CC2200]/10 file:text-[#CC2200] hover:file:bg-[#CC2200]/20"
-                            />
-                            {currentProfile?.digital_id_path && (
-                              <div className="mt-2 text-xs">
-                                <a href={currentProfile.digital_id_path} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
-                                  View Current Digital ID
-                                </a>
-                              </div>
-                            )}
-                          </div>
+                        <div>
+                          <label className="block text-xs font-bold uppercase text-[#0a0a0a]/60 mb-1.5">Digital ID Card</label>
+                          <input
+                            type="file"
+                            accept=".jpg,.jpeg,.png,.pdf"
+                            onChange={(e) => setDigitalIdFile(e.target.files?.[0] || null)}
+                            className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-[#CC2200]/10 file:text-[#CC2200] hover:file:bg-[#CC2200]/20"
+                          />
+                          {currentProfile?.digital_id_path && (
+                            <div className="mt-2 text-xs">
+                              <a href={currentProfile.digital_id_path} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
+                                View Current Digital ID
+                              </a>
+                            </div>
+                          )}
                         </div>
                       </>
                     )}

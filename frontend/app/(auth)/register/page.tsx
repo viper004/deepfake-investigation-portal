@@ -15,12 +15,12 @@ import {
   FileText, 
   Upload,
   CheckCircle,
+  Check,
   FileCheck,
   Eye,
   EyeOff
 } from "lucide-react";
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
+import { BACKEND_URL } from "@/lib/config";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -64,6 +64,15 @@ export default function RegisterPage() {
   // Password visibility states
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
+  // Password Complexity Requirements
+  const passwordCriteria = [
+    { label: "Min 6 characters", met: formData.password.length >= 6 },
+    { label: "1 capital letter (A-Z)", met: /[A-Z]/.test(formData.password) },
+    { label: "1 number (0-9)", met: /[0-9]/.test(formData.password) },
+    { label: "1 special symbol (!@#$...)", met: /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/.test(formData.password) },
+  ];
+  const isPasswordValid = passwordCriteria.every((c) => c.met);
 
   const showToast = (message: string, type: "success" | "error") => {
     const id = Date.now();
@@ -112,10 +121,25 @@ export default function RegisterPage() {
         body: JSON.stringify({ email }),
       });
 
-      const data = await res.json();
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch {
+        const text = await res.text().catch(() => "");
+        data = { detail: text || null };
+      }
 
       if (!res.ok) {
-        const errorDetail = data.detail || "Failed to send verification code.";
+        let errorDetail = data?.detail;
+        if (!errorDetail) {
+          if (res.status === 429) {
+            errorDetail = "Too many OTP requests. Please wait a few minutes and try again.";
+          } else if (res.status === 502 || res.status === 500) {
+            errorDetail = "Email delivery service unavailable. Please check your email or try again later.";
+          } else {
+            errorDetail = `Failed to send verification code (Error ${res.status}).`;
+          }
+        }
         setOtpError(errorDetail);
         showToast(errorDetail, "error");
         return;
@@ -127,8 +151,8 @@ export default function RegisterPage() {
       setOtpSuccess("Verification code sent to your email.");
       showToast("Verification code sent to your email.", "success");
     } catch (err) {
-      setOtpError("Error sending verification code. Please try again.");
-      showToast("Error sending verification code.", "error");
+      setOtpError("Connection error while requesting verification code. Please check your network and try again.");
+      showToast("Connection error sending verification code.", "error");
     } finally {
       setOtpSending(false);
     }
@@ -153,10 +177,16 @@ export default function RegisterPage() {
         body: JSON.stringify({ email, otp: otpCode.trim() }),
       });
 
-      const data = await res.json();
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch {
+        const text = await res.text().catch(() => "");
+        data = { detail: text || null };
+      }
 
       if (!res.ok) {
-        const errorDetail = data.detail || "Invalid verification code.";
+        const errorDetail = data?.detail || `Verification failed (Error ${res.status}). Please try again.`;
         setOtpError(errorDetail);
         showToast(errorDetail, "error");
         return;
@@ -234,21 +264,42 @@ export default function RegisterPage() {
 
     if (flow === "user" && !isEmailVerified) {
       setError("Please verify your email address before completing registration.");
-      showToast("Please verify your email address first.", "error");
+      showToast("Please verify your email address before completing registration.", "error");
       setLoading(false);
       return;
     }
 
-    if (!isUpgrade && formData.password !== formData.confirm_password) {
-      setError("Passwords do not match");
-      setLoading(false);
-      return;
-    }
-
-    if (flow === "user" && !profilePicFile) {
-      setError("Profile picture is required for User registration");
-      setLoading(false);
-      return;
+    if (!isUpgrade) {
+      if (formData.password.length < 6) {
+        setError("Password must be at least 6 characters long.");
+        showToast("Password must be at least 6 characters long.", "error");
+        setLoading(false);
+        return;
+      }
+      if (!/[A-Z]/.test(formData.password)) {
+        setError("Password must contain at least one capital letter (A-Z).");
+        showToast("Password must contain at least one capital letter (A-Z).", "error");
+        setLoading(false);
+        return;
+      }
+      if (!/[0-9]/.test(formData.password)) {
+        setError("Password must contain at least one number (0-9).");
+        showToast("Password must contain at least one number (0-9).", "error");
+        setLoading(false);
+        return;
+      }
+      if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/.test(formData.password)) {
+        setError("Password must contain at least one special symbol (e.g. !@#$%).");
+        showToast("Password must contain at least one special symbol (e.g. !@#$%).", "error");
+        setLoading(false);
+        return;
+      }
+      if (formData.password !== formData.confirm_password) {
+        setError("Passwords do not match");
+        showToast("Passwords do not match", "error");
+        setLoading(false);
+        return;
+      }
     }
 
     if (flow === "investigator" && !govIdFile) {
@@ -406,7 +457,10 @@ export default function RegisterPage() {
 
               <form className="space-y-5" onSubmit={handleSubmit}>
                 {error && (
-                  <div className="bg-[#CC2200]/10 border border-[#CC2200]/20 rounded-md p-3 text-sm text-[#CC2200] font-medium text-center">
+                  <div
+                    role="alert"
+                    className="bg-[#CC2200]/10 border border-[#CC2200]/20 rounded-md p-3 text-sm text-[#CC2200] font-medium text-center"
+                  >
                     {error}
                   </div>
                 )}
@@ -838,6 +892,32 @@ export default function RegisterPage() {
                             {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
                           </button>
                         </div>
+
+                        {/* Password Requirements Checklist */}
+                        {formData.password.length > 0 && (
+                          <div className="mt-2.5 p-3 rounded-lg bg-[#fafafa] border border-[#e5e5e5] text-xs">
+                            <div className="text-[11px] font-semibold text-[#0a0a0a]/60 uppercase tracking-wider mb-2">
+                              Password Requirements:
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {passwordCriteria.map((c, idx) => (
+                                <div
+                                  key={idx}
+                                  className={`flex items-center gap-1.5 transition-colors ${
+                                    c.met ? "text-emerald-700 font-semibold" : "text-[#0a0a0a]/40"
+                                  }`}
+                                >
+                                  {c.met ? (
+                                    <Check className="h-3.5 w-3.5 flex-shrink-0 text-emerald-600" />
+                                  ) : (
+                                    <span className="w-1.5 h-1.5 rounded-full bg-gray-300 ml-1 mr-1 flex-shrink-0" />
+                                  )}
+                                  <span>{c.label}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       {/* Confirm Password */}
@@ -876,7 +956,7 @@ export default function RegisterPage() {
                   <button
                     type="submit"
                     disabled={loading || (flow === "user" && !isEmailVerified)}
-                    className="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-bold text-white bg-[#CC2200] hover:bg-[#CC2200]/95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#CC2200] transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
+                    className="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-bold text-white bg-[#CC2200] hover:bg-[#CC2200]/95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#CC2200] transition-all disabled:opacity-50 disabled:cursor-not-allowed group cursor-pointer"
                   >
                     {loading 
                       ? (flow === "investigator" ? "Submitting Application..." : "Registering Account...") 

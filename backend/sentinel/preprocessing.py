@@ -1,19 +1,24 @@
 import os
 from typing import Tuple, Union, BinaryIO
 from PIL import Image, ImageOps
-import torch
-import torchvision.transforms as T
 
-# Standard PyTorch vision normalization parameters
-IMAGENET_MEAN = [0.485, 0.456, 0.406]
-IMAGENET_STD = [0.229, 0.224, 0.225]
+try:
+    import torch
+    import torchvision.transforms as T
+    # Standard PyTorch vision normalization parameters
+    IMAGENET_MEAN = [0.485, 0.456, 0.406]
+    IMAGENET_STD = [0.229, 0.224, 0.225]
 
-# Inference preprocessing pipeline
-INFERENCE_TRANSFORM = T.Compose([
-    T.Resize((224, 224), interpolation=T.InterpolationMode.BILINEAR),
-    T.ToTensor(),
-    T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
-])
+    # Inference preprocessing pipeline
+    INFERENCE_TRANSFORM = T.Compose([
+        T.Resize((224, 224), interpolation=T.InterpolationMode.BILINEAR),
+        T.ToTensor(),
+        T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
+    ])
+except ImportError:
+    torch = None
+    T = None
+    INFERENCE_TRANSFORM = None
 
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".jfif"}
 

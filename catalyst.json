@@ -1,0 +1,14 @@
+{
+  "appsail": [
+    {
+      "source": "backend",
+      "name": "dip-backend"
+    }
+  ],
+  "slate": [
+    {
+      "name": "dip-frontend",
+      "source": "/home/jagansyam/Desktop/deepfake-investigation-portal/frontend"
+    }
+  ]
+}

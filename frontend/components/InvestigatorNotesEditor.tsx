@@ -5,6 +5,7 @@ import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Underline from "@tiptap/extension-underline";
 import TextAlign from "@tiptap/extension-text-align";
+import { BACKEND_URL } from "@/lib/config";
 import { 
   Bold, 
   Italic, 
@@ -155,7 +156,7 @@ export default function InvestigatorNotesEditor({
   const [isMounted, setIsMounted] = useState<boolean>(false);
   const [, forceUpdate] = useState<number>(0);
 
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
+  const backendUrl = BACKEND_URL;
 
   // Permission Checks
   const assignedIdStr = assignedExpertId !== undefined && assignedExpertId !== null ? String(assignedExpertId) : "";

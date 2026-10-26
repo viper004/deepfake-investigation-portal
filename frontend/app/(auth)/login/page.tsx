@@ -18,6 +18,7 @@ import {
   Eye,
   EyeOff
 } from "lucide-react";
+import { BACKEND_URL } from "@/lib/config";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -128,7 +129,7 @@ export default function LoginPage() {
     setError("");
 
     try {
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
+      const backendUrl = BACKEND_URL;
       const res = await fetch(`${backendUrl}/api/v1/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -182,7 +183,7 @@ export default function LoginPage() {
     }
 
     try {
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
+      const backendUrl = BACKEND_URL;
       const res = await fetch(`${backendUrl}/api/v1/auth/forgot-password/request`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -219,7 +220,7 @@ export default function LoginPage() {
     }
 
     try {
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
+      const backendUrl = BACKEND_URL;
       const res = await fetch(`${backendUrl}/api/v1/auth/forgot-password/verify-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -250,7 +251,7 @@ export default function LoginPage() {
     setModalLoading(true);
 
     try {
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
+      const backendUrl = BACKEND_URL;
       const res = await fetch(`${backendUrl}/api/v1/auth/forgot-password/resend-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -286,7 +287,7 @@ export default function LoginPage() {
     setModalLoading(true);
 
     try {
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
+      const backendUrl = BACKEND_URL;
       const res = await fetch(`${backendUrl}/api/v1/auth/forgot-password/reset-password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -347,6 +348,8 @@ export default function LoginPage() {
                   <Mail className="h-5 w-5 text-[#0a0a0a]/40" />
                 </div>
                 <input
+                  id="email"
+                  name="email"
                   type="email"
                   required
                   value={email}
@@ -366,6 +369,8 @@ export default function LoginPage() {
                   <Lock className="h-5 w-5 text-[#0a0a0a]/40" />
                 </div>
                 <input
+                  id="password"
+                  name="password"
                   type={showLoginPassword ? "text" : "password"}
                   required
                   value={password}

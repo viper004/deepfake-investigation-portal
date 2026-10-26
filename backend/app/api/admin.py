@@ -6,13 +6,26 @@ from jose import jwt, JWTError
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import os
 from app.database.database import SessionLocal
-from app.models.user import User, InvestigatorInvitation, AccountRole, InvitationLog
-from app.models.models import Role, AuditLog, InvestigationCase, EvidenceFile, AIAnalysis
+from app.models.user import (
+    User, InvestigatorProfile, AccountRole, UserProfile,
+    InvestigatorInvitation, InvitationLog, EmailVerification,
+    PasswordResetOTP, PasswordChangeOTP
+)
+from app.models.models import (
+    Role, AuditLog, InvestigationCase, EvidenceFile, MediaMetadata,
+    AIAnalysis, ForensicReview, InvestigationNote, InvestigatorNote,
+    Report, Notification, CaseMessage, ForensicScan, InvestigationDocument,
+    FinalCaseReport, MessageAttachment
+)
 from app.schemas.user import UserResponse
 from app.utils.auth import SECRET_KEY, ALGORITHM
 from app.services.email_service import send_investigator_invitation_email
 from pydantic import BaseModel, EmailStr
+
+BASE_BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+UPLOAD_DIR = os.path.join(BASE_BACKEND_DIR, "uploads")
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -386,9 +399,296 @@ def delete_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
         
-    db.delete(user)
-    db.commit()
-    return {"message": "User deleted successfully"}
+    # Prevent deleting primary superuser or self
+    if user.email == "superuser@example.com" or str(user.id) == str(admin.get("sub")):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete the primary administrator or your own account."
+        )
+
+    user_name = user.full_name
+    user_email = user.email
+
+    try:
+        # 1. Unassign user from any active investigation cases
+        db.query(InvestigationCase).filter(InvestigationCase.assigned_expert == user.id).update(
+            {"assigned_expert": None, "assigned_investigator_id": None}, synchronize_session=False
+        )
+        db.query(InvestigationCase).filter(InvestigationCase.assigned_investigator_id == user.id).update(
+            {"assigned_investigator_id": None}, synchronize_session=False
+        )
+
+        # 2. Delete all cases created by this user along with their child assets
+        created_cases = db.query(InvestigationCase).filter(InvestigationCase.created_by == user.id).all()
+        for case in created_cases:
+            evidence_files = db.query(EvidenceFile).filter(EvidenceFile.case_id == case.id).all()
+            for ev in evidence_files:
+                db.query(MediaMetadata).filter(MediaMetadata.evidence_id == ev.id).delete(synchronize_session=False)
+                analyses = db.query(AIAnalysis).filter(AIAnalysis.evidence_id == ev.id).all()
+                for an in analyses:
+                    db.query(ForensicReview).filter(ForensicReview.analysis_id == an.id).delete(synchronize_session=False)
+                    db.delete(an)
+                db.delete(ev)
+
+            db.query(InvestigationNote).filter(InvestigationNote.case_id == case.id).delete(synchronize_session=False)
+            db.query(InvestigatorNote).filter(InvestigatorNote.case_id == case.id).delete(synchronize_session=False)
+            db.query(Report).filter(Report.case_id == case.id).delete(synchronize_session=False)
+            db.query(CaseMessage).filter(CaseMessage.case_id == case.id).delete(synchronize_session=False)
+            db.query(InvestigationDocument).filter(InvestigationDocument.case_id == case.id).delete(synchronize_session=False)
+            db.query(FinalCaseReport).filter(FinalCaseReport.case_id == case.id).delete(synchronize_session=False)
+            db.delete(case)
+
+        # 3. Clean up user's evidence, reviews, notes, reports on any remaining cases
+        user_evidence = db.query(EvidenceFile).filter(EvidenceFile.uploaded_by == user.id).all()
+        for ev in user_evidence:
+            db.query(MediaMetadata).filter(MediaMetadata.evidence_id == ev.id).delete(synchronize_session=False)
+            analyses = db.query(AIAnalysis).filter(AIAnalysis.evidence_id == ev.id).all()
+            for an in analyses:
+                db.query(ForensicReview).filter(ForensicReview.analysis_id == an.id).delete(synchronize_session=False)
+                db.delete(an)
+            db.delete(ev)
+        for ev in user_evidence:
+            db.query(MediaMetadata).filter(MediaMetadata.evidence_id == ev.id).delete(synchronize_session=False)
+            db.query(AIAnalysis).filter(AIAnalysis.evidence_id == ev.id).delete(synchronize_session=False)
+            db.delete(ev)
+
+        db.query(ForensicReview).filter(ForensicReview.reviewer_id == user.id).delete(synchronize_session=False)
+        db.query(InvestigationNote).filter(InvestigationNote.user_id == user.id).delete(synchronize_session=False)
+        db.query(InvestigatorNote).filter(InvestigatorNote.investigator_id == user.id).delete(synchronize_session=False)
+        db.query(Report).filter(Report.generated_by == user.id).delete(synchronize_session=False)
+        db.query(CaseMessage).filter(CaseMessage.sender_id == user.id).delete(synchronize_session=False)
+        db.query(ForensicScan).filter(ForensicScan.scanned_by == user.id).delete(synchronize_session=False)
+        db.query(InvestigationDocument).filter(InvestigationDocument.investigator_id == user.id).delete(synchronize_session=False)
+        db.query(FinalCaseReport).filter(FinalCaseReport.investigator_id == user.id).delete(synchronize_session=False)
+
+        # 4. Nullify or delete audit logs
+        db.query(AuditLog).filter(AuditLog.user_id == user.id).update({"user_id": None}, synchronize_session=False)
+
+        # 5. Clean up auth & profile records
+        db.query(InvestigatorProfile).filter(InvestigatorProfile.user_id == user.id).delete(synchronize_session=False)
+        db.query(AccountRole).filter(AccountRole.account_id == user.id).delete(synchronize_session=False)
+        db.query(AccountRole).filter(AccountRole.assigned_by == user.id).update({"assigned_by": None}, synchronize_session=False)
+        db.query(UserProfile).filter(UserProfile.account_id == user.id).delete(synchronize_session=False)
+        db.query(Notification).filter(Notification.user_id == user.id).delete(synchronize_session=False)
+        db.query(PasswordChangeOTP).filter(PasswordChangeOTP.user_id == user.id).delete(synchronize_session=False)
+        db.query(EmailVerification).filter(EmailVerification.email == user_email).delete(synchronize_session=False)
+        db.query(PasswordResetOTP).filter(PasswordResetOTP.email == user_email).delete(synchronize_session=False)
+        db.query(InvestigatorInvitation).filter(InvestigatorInvitation.email == user_email).delete(synchronize_session=False)
+
+        # 6. Clean up uploaded profile files from disk
+        for path_val, dir_name in [
+            (user.profile_picture, "profiles"),
+            (user.government_id, "gov_ids"),
+            (user.digital_id_path, "digital_ids")
+        ]:
+            if path_val:
+                fname = os.path.basename(path_val)
+                for base_dir in [UPLOAD_DIR, os.path.join(BASE_BACKEND_DIR, "..", ".uploads_cache")]:
+                    fpath = os.path.join(base_dir, dir_name, fname)
+                    if os.path.exists(fpath):
+                        try:
+                            os.remove(fpath)
+                        except Exception:
+                            pass
+
+        # 7. Delete the user
+        db.delete(user)
+        db.commit()
+
+        # Record audit log for admin action
+        try:
+            audit = AuditLog(
+                user_id=int(admin.get("sub")) if str(admin.get("sub", "")).isdigit() else None,
+                action="USER_DELETED",
+                resource_type="USER",
+                resource_id=user_id,
+                details=f"Admin deleted user {user_name} ({user_email}) completely from the system.",
+                timestamp=datetime.now(timezone.utc)
+            )
+            db.add(audit)
+            db.commit()
+        except Exception:
+            pass
+
+        return {"message": f"User {user_name} ({user_email}) has been completely removed from the system."}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete user: {str(e)}"
+        )
+
+@router.delete("/cases/{case_id}")
+def delete_case(
+    case_id: int,
+    db: Session = Depends(get_db),
+    admin: dict = Depends(get_current_admin)
+):
+    case = db.query(InvestigationCase).filter(InvestigationCase.id == case_id).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    case_number = case.case_number
+    case_title = case.title
+
+    try:
+        # 1. Clean up associated files on disk
+        evidence_files = db.query(EvidenceFile).filter(EvidenceFile.case_id == case_id).all()
+        for ev in evidence_files:
+            fname = ev.file_name
+            for base_dir in [UPLOAD_DIR, os.path.join(BASE_BACKEND_DIR, "..", ".uploads_cache")]:
+                for candidate in [
+                    os.path.join(base_dir, fname),
+                    os.path.join(base_dir, "evidence", fname),
+                    ev.storage_path
+                ]:
+                    if candidate and os.path.exists(candidate) and os.path.isfile(candidate):
+                        try:
+                            os.remove(candidate)
+                        except Exception:
+                            pass
+
+        scans = db.query(ForensicScan).filter(ForensicScan.case_id == case_id).all()
+        for s in scans:
+            if s.pdf_path:
+                fname = os.path.basename(s.pdf_path)
+                for base_dir in [UPLOAD_DIR, os.path.join(BASE_BACKEND_DIR, "..", ".uploads_cache")]:
+                    for candidate in [
+                        os.path.join(base_dir, "reports", fname),
+                        os.path.join(base_dir, fname),
+                        s.pdf_path
+                    ]:
+                        if candidate and os.path.exists(candidate) and os.path.isfile(candidate):
+                            try:
+                                os.remove(candidate)
+                            except Exception:
+                                pass
+
+        reports = db.query(Report).filter(Report.case_id == case_id).all()
+        for r in reports:
+            if r.pdf_path:
+                fname = os.path.basename(r.pdf_path)
+                for base_dir in [UPLOAD_DIR, os.path.join(BASE_BACKEND_DIR, "..", ".uploads_cache")]:
+                    for candidate in [
+                        os.path.join(base_dir, "reports", fname),
+                        os.path.join(base_dir, fname),
+                        r.pdf_path
+                    ]:
+                        if candidate and os.path.exists(candidate) and os.path.isfile(candidate):
+                            try:
+                                os.remove(candidate)
+                            except Exception:
+                                pass
+
+        docs = db.query(InvestigationDocument).filter(InvestigationDocument.case_id == case_id).all()
+        for d in docs:
+            if d.stored_path:
+                fname = os.path.basename(d.stored_path)
+                for base_dir in [UPLOAD_DIR, os.path.join(BASE_BACKEND_DIR, "..", ".uploads_cache")]:
+                    for candidate in [
+                        os.path.join(base_dir, "documents", fname),
+                        os.path.join(base_dir, fname),
+                        d.stored_path
+                    ]:
+                        if candidate and os.path.exists(candidate) and os.path.isfile(candidate):
+                            try:
+                                os.remove(candidate)
+                            except Exception:
+                                pass
+
+        final_reports = db.query(FinalCaseReport).filter(FinalCaseReport.case_id == case_id).all()
+        for fr in final_reports:
+            if fr.stored_path:
+                fname = os.path.basename(fr.stored_path)
+                for base_dir in [UPLOAD_DIR, os.path.join(BASE_BACKEND_DIR, "..", ".uploads_cache")]:
+                    for candidate in [
+                        os.path.join(base_dir, "final_reports", fname),
+                        os.path.join(base_dir, "reports", fname),
+                        os.path.join(base_dir, fname),
+                        fr.stored_path
+                    ]:
+                        if candidate and os.path.exists(candidate) and os.path.isfile(candidate):
+                            try:
+                                os.remove(candidate)
+                            except Exception:
+                                pass
+
+        attachments = db.query(MessageAttachment).filter(MessageAttachment.case_id == case_id).all()
+        for att in attachments:
+            if att.storage_key:
+                fname = os.path.basename(att.storage_key)
+                for base_dir in [UPLOAD_DIR, os.path.join(BASE_BACKEND_DIR, "..", ".uploads_cache")]:
+                    for candidate in [
+                        os.path.join(base_dir, "attachments", fname),
+                        os.path.join(base_dir, fname),
+                        att.storage_key
+                    ]:
+                        if candidate and os.path.exists(candidate) and os.path.isfile(candidate):
+                            try:
+                                os.remove(candidate)
+                            except Exception:
+                                pass
+
+        # 2. Database cascading cleanup
+        for ev in evidence_files:
+            db.query(MediaMetadata).filter(MediaMetadata.evidence_id == ev.id).delete(synchronize_session=False)
+            analyses = db.query(AIAnalysis).filter(AIAnalysis.evidence_id == ev.id).all()
+            for an in analyses:
+                db.query(ForensicReview).filter(ForensicReview.analysis_id == an.id).delete(synchronize_session=False)
+                db.delete(an)
+
+        db.query(MessageAttachment).filter(MessageAttachment.case_id == case_id).delete(synchronize_session=False)
+        db.query(CaseMessage).filter(CaseMessage.case_id == case_id).delete(synchronize_session=False)
+
+        for ev in evidence_files:
+            db.delete(ev)
+
+        db.query(InvestigationNote).filter(InvestigationNote.case_id == case_id).delete(synchronize_session=False)
+        db.query(InvestigatorNote).filter(InvestigatorNote.case_id == case_id).delete(synchronize_session=False)
+        db.query(Report).filter(Report.case_id == case_id).delete(synchronize_session=False)
+        db.query(InvestigationDocument).filter(InvestigationDocument.case_id == case_id).delete(synchronize_session=False)
+        db.query(FinalCaseReport).filter(FinalCaseReport.case_id == case_id).delete(synchronize_session=False)
+        db.query(ForensicScan).filter(ForensicScan.case_id == case_id).delete(synchronize_session=False)
+
+        # Disassociate audit logs
+        db.query(AuditLog).filter(AuditLog.case_id == case_id).update({"case_id": None}, synchronize_session=False)
+        db.query(AuditLog).filter(AuditLog.target_type == "CASE", AuditLog.target_id == str(case_id)).update({"target_id": None}, synchronize_session=False)
+
+        # 3. Delete the case itself
+        db.delete(case)
+        db.commit()
+
+        # Audit entry
+        try:
+            audit = AuditLog(
+                user_id=int(admin.get("sub")) if str(admin.get("sub", "")).isdigit() else None,
+                action="CASE_DELETED",
+                module="Case Management",
+                target_type="CASE",
+                target_id=str(case_id),
+                severity="HIGH",
+                status="SUCCESS",
+                description=f"Admin deleted case {case_number} ('{case_title}') and all its forensic assets from the platform.",
+                timestamp=datetime.now(timezone.utc)
+            )
+            db.add(audit)
+            db.commit()
+        except Exception:
+            pass
+
+        return {"message": f"Case {case_number} has been permanently deleted from the system."}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete case: {str(e)}"
+        )
 
 @router.put("/users/{user_id}")
 def update_user(

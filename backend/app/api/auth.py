@@ -25,6 +25,7 @@ BASE_BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 UPLOAD_DIR = os.path.join(BASE_BACKEND_DIR, "uploads")
 PROFILES_DIR = os.path.join(UPLOAD_DIR, "profiles")
 GOV_IDS_DIR = os.path.join(UPLOAD_DIR, "gov_ids")
+DIGITAL_IDS_DIR = os.path.join(UPLOAD_DIR, "digital_ids")
 
 def get_db():
     db = SessionLocal()
@@ -38,10 +39,33 @@ def hash_otp(otp: str) -> str:
     salt = "AURORA_OTP_SALT_2026"
     return hashlib.sha256((otp + salt).encode()).hexdigest()
 
+def validate_password_complexity(password: str) -> None:
+    if len(password) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 6 characters long."
+        )
+    if not re.search(r"[A-Z]", password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must contain at least one capital letter (A-Z)."
+        )
+    if not re.search(r"[0-9]", password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must contain at least one number (0-9)."
+        )
+    if not re.search(r"[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>\/?`~]", password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must contain at least one special symbol (e.g. !@#$%^&*)."
+        )
+
 def cleanup_expired_otps(db: Session):
     try:
         now = datetime.now(timezone.utc)
         db.query(EmailVerification).filter(EmailVerification.expires_at < now).delete(synchronize_session=False)
+        db.query(PasswordResetOTP).filter(PasswordResetOTP.expires_at < now).delete(synchronize_session=False)
         db.commit()
     except Exception:
         db.rollback()
@@ -54,7 +78,7 @@ class VerifyOTPRequestSchema(BaseModel):
     otp: str
 
 @router.post("/send-email-otp")
-async def send_email_otp(data: OTPRequestSchema, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+async def send_email_otp(data: OTPRequestSchema, db: Session = Depends(get_db)):
     email = data.email.strip().lower()
     
     # 1. Validate email format
@@ -77,9 +101,10 @@ async def send_email_otp(data: OTPRequestSchema, background_tasks: BackgroundTas
     cleanup_expired_otps(db)
 
     # 4. Check rate limit: Maximum 5 OTP requests per 15 minutes for the same email
+    cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=15)
     recent_requests = db.query(EmailVerification).filter(
         EmailVerification.email == email,
-        EmailVerification.created_at >= func.date_sub(func.now(), text("INTERVAL 15 MINUTE"))
+        EmailVerification.created_at >= cutoff_time
     ).count()
 
     if recent_requests >= 5:
@@ -111,8 +136,25 @@ async def send_email_otp(data: OTPRequestSchema, background_tasks: BackgroundTas
     db.add(verification_entry)
     db.commit()
 
-    # 7. Send OTP email in background
-    background_tasks.add_task(send_otp_email, email, otp_code)
+    # 7. Deliver OTP email immediately to ensure delivery confirmation
+    try:
+        delivered = await send_otp_email(email, otp_code)
+        if not delivered:
+            db.delete(verification_entry)
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to deliver verification code email. Please check your email or try again later."
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.delete(verification_entry)
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error delivering verification code. Please try again later."
+        )
 
     return {"message": "Verification code sent to your email."}
 
@@ -145,7 +187,7 @@ def verify_email_otp(data: VerifyOTPRequestSchema, db: Session = Depends(get_db)
     if record_expires < now:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Verification code has expired or is invalid."
+            detail="Verification code has expired. Please request a new one."
         )
 
     if record.attempt_count >= 5:
@@ -171,8 +213,8 @@ def verify_email_otp(data: VerifyOTPRequestSchema, db: Session = Depends(get_db)
         )
 
 @router.post("/resend-email-otp")
-async def resend_email_otp(data: OTPRequestSchema, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    return await send_email_otp(data, background_tasks, db)
+async def resend_email_otp(data: OTPRequestSchema, db: Session = Depends(get_db)):
+    return await send_email_otp(data, db)
 
 # ──────────────── FORGOT PASSWORD ENDPOINTS ────────────────
 
@@ -213,9 +255,10 @@ async def forgot_password_request(data: ForgotPasswordRequestSchema, background_
     cleanup_expired_otps(db)
 
     # 4. Check rate limit: Maximum 5 OTP requests per 15 minutes for the same email
+    cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=15)
     recent_requests = db.query(PasswordResetOTP).filter(
         PasswordResetOTP.email == email,
-        PasswordResetOTP.created_at >= func.date_sub(func.now(), text("INTERVAL 15 MINUTE"))
+        PasswordResetOTP.created_at >= cutoff_time
     ).count()
 
     if recent_requests >= 5:
@@ -371,6 +414,8 @@ def forgot_password_reset(data: ResetPasswordSchema, db: Session = Depends(get_d
             detail="User account not found."
         )
 
+    validate_password_complexity(new_pass)
+
     # Update password using existing bcrypt/argon2/pbkdf2 password hashing
     user.password = get_password_hash(new_pass)
     user.updated_at = datetime.now(timezone.utc)
@@ -393,7 +438,7 @@ def register_user(
     email: str = Form(...),
     password: str = Form(...),
     phone: Optional[str] = Form(None),
-    profile_picture_file: UploadFile = File(...),
+    profile_picture_file: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db)
 ):
     email_clean = email.strip().lower()
@@ -403,10 +448,14 @@ def register_user(
             detail="An account with this email already exists."
         )
 
-    # Check if email is verified
+    validate_password_complexity(password)
+
+    # Check if email is verified within the last 15 minutes
+    verified_cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
     verification_record = db.query(EmailVerification).filter(
         EmailVerification.email == email_clean,
-        EmailVerification.verified == True
+        EmailVerification.verified == True,
+        EmailVerification.updated_at >= verified_cutoff
     ).first()
 
     if not verification_record:
@@ -424,8 +473,8 @@ def register_user(
         filepath = os.path.join(PROFILES_DIR, unique_name)
         with open(filepath, "wb") as buffer:
             shutil.copyfileobj(profile_picture_file.file, buffer)
-        backend_base_url = os.getenv("BACKEND_PUBLIC_URL", "http://127.0.0.1:8000").rstrip("/")
-        profile_pic_url = f"{backend_base_url}/api/v1/auth/document/profiles/{unique_name}"
+        backend_base_url = os.getenv("BACKEND_PUBLIC_URL", "").rstrip("/")
+        profile_pic_url = f"{backend_base_url}/api/v1/auth/document/profiles/{unique_name}" if backend_base_url else f"/api/v1/auth/document/profiles/{unique_name}"
     
     db_user = User(
         full_name=full_name,
@@ -504,8 +553,8 @@ def register_investigator(
     gov_id_path = os.path.join(GOV_IDS_DIR, gov_id_unique_name)
     with open(gov_id_path, "wb") as buffer:
         shutil.copyfileobj(government_id_file.file, buffer)
-    backend_base_url = os.getenv("BACKEND_PUBLIC_URL", "http://127.0.0.1:8000").rstrip("/")
-    gov_id_url = f"{backend_base_url}/api/v1/auth/document/gov_ids/{gov_id_unique_name}"
+    backend_base_url = os.getenv("BACKEND_PUBLIC_URL", "").rstrip("/")
+    gov_id_url = f"{backend_base_url}/api/v1/auth/document/gov_ids/{gov_id_unique_name}" if backend_base_url else f"/api/v1/auth/document/gov_ids/{gov_id_unique_name}"
     
     # Save Profile Picture
     profile_pic_url = None
@@ -515,7 +564,7 @@ def register_investigator(
         prof_path = os.path.join(PROFILES_DIR, prof_unique_name)
         with open(prof_path, "wb") as buffer:
             shutil.copyfileobj(profile_picture_file.file, buffer)
-        profile_pic_url = f"{backend_base_url}/api/v1/auth/document/profiles/{prof_unique_name}"
+        profile_pic_url = f"{backend_base_url}/api/v1/auth/document/profiles/{prof_unique_name}" if backend_base_url else f"/api/v1/auth/document/profiles/{prof_unique_name}"
     
     if existing_user:
         db_user = existing_user
@@ -527,6 +576,7 @@ def register_investigator(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Password is required for new accounts"
             )
+        validate_password_complexity(password)
         hashed_password = get_password_hash(password)
         db_user = User(
             full_name=full_name,
@@ -599,16 +649,38 @@ def verify_invitation(token: str, db: Session = Depends(get_db)):
 @router.get("/document/profiles/{filename}")
 def get_profile_picture(filename: str):
     filepath = os.path.join(PROFILES_DIR, filename)
-    if not os.path.exists(filepath):
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(filepath)
+    if os.path.exists(filepath):
+        return FileResponse(filepath)
+    # Check fallback cached locations
+    for alt_dir in [
+        os.path.join(BASE_BACKEND_DIR, "..", ".uploads_cache", "profiles"),
+        os.path.join(BASE_BACKEND_DIR, ".uploads_cache", "profiles"),
+        os.path.join(UPLOAD_DIR, filename)
+    ]:
+        alt_path = os.path.join(alt_dir, filename) if os.path.isdir(alt_dir) else alt_dir
+        if os.path.exists(alt_path):
+            return FileResponse(alt_path)
+    raise HTTPException(status_code=404, detail="File not found")
 
 @router.get("/document/gov_ids/{filename}")
 def get_government_id(filename: str):
     filepath = os.path.join(GOV_IDS_DIR, filename)
-    if not os.path.exists(filepath):
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(filepath)
+    if os.path.exists(filepath):
+        return FileResponse(filepath)
+    alt_path = os.path.join(BASE_BACKEND_DIR, "..", ".uploads_cache", "gov_ids", filename)
+    if os.path.exists(alt_path):
+        return FileResponse(alt_path)
+    raise HTTPException(status_code=404, detail="File not found")
+
+@router.get("/document/digital_ids/{filename}")
+def get_digital_id(filename: str):
+    filepath = os.path.join(DIGITAL_IDS_DIR, filename)
+    if os.path.exists(filepath):
+        return FileResponse(filepath)
+    alt_path = os.path.join(BASE_BACKEND_DIR, "..", ".uploads_cache", "digital_ids", filename)
+    if os.path.exists(alt_path):
+        return FileResponse(alt_path)
+    raise HTTPException(status_code=404, detail="File not found")
 
 @router.post("/register")
 def register(user: UserCreate, db: Session = Depends(get_db)):
@@ -688,6 +760,10 @@ def login(credentials: UserLogin, db: Session = Depends(get_db)):
         data={"sub": str(user.id), "email": user.email, "role": user.role_id, "roles": roles}
     )
     
+    pic_url = user.profile_picture
+    if pic_url and "/api/v1/auth/document/profiles/" in pic_url:
+        pic_url = "/api/v1/auth/document/profiles/" + pic_url.split("/api/v1/auth/document/profiles/")[-1]
+
     return {
         "message": "Login successful",
         "access_token": access_token,
@@ -699,7 +775,7 @@ def login(credentials: UserLogin, db: Session = Depends(get_db)):
             "role_id": user.role_id,
             "roles": roles,
             "status": user.status,
-            "profile_picture": user.profile_picture
+            "profile_picture": pic_url
         }
     }
 

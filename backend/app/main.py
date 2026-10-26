@@ -1,4 +1,14 @@
 import os
+import sys
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LIB_PY311 = os.path.join(BASE_DIR, "lib_py311")
+if sys.version_info < (3, 14) and os.path.isdir(LIB_PY311) and LIB_PY311 not in sys.path:
+    sys.path.insert(0, LIB_PY311)
+
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -6,10 +16,12 @@ from app.api.auth import router as auth_router
 from app.api.admin import router as admin_router
 import app.models.models  # Import all models to register with SQLAlchemy
 from sqlalchemy import text
-from app.database.database import SessionLocal
+from app.database.database import SessionLocal, engine
 
 # Database updates on startup
 def init_db_updates():
+    if "sqlite" in str(engine.url):
+        return
     db = SessionLocal()
     try:
         # Check if government_id column exists
@@ -833,11 +845,17 @@ def seed_synthetic_audit_logs():
         db.close()
 
 # Run database configuration updates and seed initial roles/users/models
-init_db_updates()
-seed_roles_and_users()
-seed_ai_models()
-seed_investigation_cases()
-seed_synthetic_audit_logs()
+try:
+    from app.database.database import Base, engine
+    Base.metadata.create_all(bind=engine)
+    init_db_updates()
+    seed_roles_and_users()
+    seed_ai_models()
+    seed_investigation_cases()
+    seed_synthetic_audit_logs()
+except Exception as init_err:
+    print("Warning: Database initialization deferred/skipped:", init_err)
+
 
 app = FastAPI(title="Aurora API")
 
@@ -867,6 +885,8 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 # Configure CORS so frontend can call backend
 cors_origins = [
+    "https://aurora.onslate.in",
+    "https://dip-frontend-npczgoxg.onslate.in",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "http://localhost:3001",
@@ -882,10 +902,18 @@ if os.getenv("CORS_ORIGINS"):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(set(cors_origins)),
-    allow_origin_regex=os.getenv("CORS_ORIGIN_REGEX", r"https?://.*"),
+    allow_origin_regex=os.getenv("CORS_ORIGIN_REGEX", r"https://.*\.onslate\.(in|com)|https?://(localhost|127\.0\.0\.1)(:\d+)?"),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "X-Requested-With",
+        "Accept",
+        "Origin",
+        "Access-Control-Request-Method",
+        "Access-Control-Request-Headers",
+    ],
 )
 
 from app.api.user import router as user_router
@@ -905,6 +933,7 @@ from app.api.user import (
     promote_attachment_to_evidence, MessageCreate
 )
 from app.models.user import User
+from sqlalchemy.orm import Session
 from fastapi import Depends, UploadFile, File, Query, Header
 from typing import Optional
 
@@ -995,6 +1024,24 @@ def send_case_message_alias(
 ):
     return send_case_message(case_id=case_id, payload=payload, db=db, user=user)
 
+from app.api.auth import login as auth_login
+from app.schemas.user import UserLogin
+
+@app.post("/login")
+@app.post("/api/login")
+@app.post("/api/v1/login")
+def login_alias(credentials: UserLogin, db: Session = Depends(get_db)):
+    return auth_login(credentials=credentials, db=db)
+
 @app.get("/")
 def root():
     return {"message": "Aurora Forensic Portal API"}
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("X_ZOHO_CATALYST_LISTEN_PORT", os.environ.get("PORT", 8000)))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port)

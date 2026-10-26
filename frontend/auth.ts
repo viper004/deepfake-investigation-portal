@@ -1,7 +1,10 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
+import { BACKEND_URL } from "@/lib/config";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
+  secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET || "fL6+4K+2d7bQ9a5N8wR1xZ4yU7jC3vM9pT5kH2eL8o=",
+  trustHost: true,
   providers: [
     Credentials({
       credentials: {
@@ -12,7 +15,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (!credentials?.email || !credentials?.password) return null;
         
         try {
-          const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
+          const backendUrl = BACKEND_URL;
           const res = await fetch(`${backendUrl}/api/v1/auth/login`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -32,6 +35,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
               role: data.user.role_id,
               roles: data.user.roles,
               status: data.user.status,
+              image: data.user.profile_picture || null,
+              profile_picture: data.user.profile_picture || null,
               accessToken: data.access_token
             };
           }
@@ -48,12 +53,29 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     error: "/login", // We can handle errors via search params on the login page
   },
   callbacks: {
+    async redirect({ url, baseUrl }) {
+      if (url.startsWith("/")) {
+        return `${baseUrl}${url}`;
+      }
+      if (url.includes("dip-frontend-npczgoxg.onslate.in")) {
+        return url.replace("https://dip-frontend-npczgoxg.onslate.in", "https://aurora.onslate.in");
+      }
+      try {
+        const parsed = new URL(url);
+        if (parsed.origin === baseUrl || parsed.hostname.endsWith(".onslate.in")) {
+          return url;
+        }
+      } catch {}
+      return baseUrl;
+    },
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
         token.role = user.role;
         token.roles = user.roles;
         token.status = user.status;
+        token.picture = (user as any).profile_picture || user.image;
+        token.profile_picture = (user as any).profile_picture || user.image;
         token.accessToken = user.accessToken;
       }
       return token;
@@ -64,6 +86,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         session.user.role = token.role as number | undefined;
         session.user.roles = token.roles as number[] | undefined;
         session.user.status = token.status as string | undefined;
+        session.user.image = (token.picture || token.profile_picture) as string | undefined;
+        (session.user as any).profile_picture = (token.profile_picture || token.picture) as string | undefined;
         session.accessToken = token.accessToken as string | undefined;
       }
       return session;

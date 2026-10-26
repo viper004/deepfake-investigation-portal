@@ -1985,6 +1985,14 @@ def get_profile(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
+    pic_url = user.profile_picture
+    if pic_url and "/api/v1/auth/document/profiles/" in pic_url:
+        pic_url = "/api/v1/auth/document/profiles/" + pic_url.split("/api/v1/auth/document/profiles/")[-1]
+
+    dig_url = user.digital_id_path
+    if dig_url and "/api/v1/auth/document/digital_ids/" in dig_url:
+        dig_url = "/api/v1/auth/document/digital_ids/" + dig_url.split("/api/v1/auth/document/digital_ids/")[-1]
+
     return {
         "id": user.id,
         "full_name": user.full_name,
@@ -1994,8 +2002,8 @@ def get_profile(
         "date_of_birth": user.date_of_birth,
         "gender": user.gender,
         "address": user.address,
-        "profile_picture": user.profile_picture,
-        "digital_id_path": user.digital_id_path,
+        "profile_picture": pic_url,
+        "digital_id_path": dig_url,
         "status": user.status,
         "role_id": user.role_id,
         "created_at": user.created_at,
@@ -2026,14 +2034,14 @@ def update_profile(
     if password and password.strip():
         user.password = get_password_hash(password)
         
-    backend_base_url = os.getenv("BACKEND_PUBLIC_URL", "http://127.0.0.1:8000").rstrip("/")
+    backend_base_url = os.getenv("BACKEND_PUBLIC_URL", "").rstrip("/")
     if profile_picture_file and profile_picture_file.filename:
         os.makedirs(os.path.join(UPLOAD_DIR, "profiles"), exist_ok=True)
         unique_name = f"{uuid.uuid4().hex}_{profile_picture_file.filename}"
         filepath = os.path.join(UPLOAD_DIR, "profiles", unique_name)
         with open(filepath, "wb") as buffer:
             shutil.copyfileobj(profile_picture_file.file, buffer)
-        user.profile_picture = f"{backend_base_url}/api/v1/auth/document/profiles/{unique_name}"
+        user.profile_picture = f"{backend_base_url}/api/v1/auth/document/profiles/{unique_name}" if backend_base_url else f"/api/v1/auth/document/profiles/{unique_name}"
 
     if digital_id_file and digital_id_file.filename:
         os.makedirs(os.path.join(UPLOAD_DIR, "digital_ids"), exist_ok=True)
@@ -2041,7 +2049,7 @@ def update_profile(
         filepath = os.path.join(UPLOAD_DIR, "digital_ids", unique_name)
         with open(filepath, "wb") as buffer:
             shutil.copyfileobj(digital_id_file.file, buffer)
-        user.digital_id_path = f"{backend_base_url}/api/v1/auth/document/digital_ids/{unique_name}"
+        user.digital_id_path = f"{backend_base_url}/api/v1/auth/document/digital_ids/{unique_name}" if backend_base_url else f"/api/v1/auth/document/digital_ids/{unique_name}"
 
     db.commit()
     db.refresh(user)
@@ -2051,6 +2059,14 @@ def update_profile(
         "Your account profile settings have been successfully updated."
     )
     
+    pic_url = user.profile_picture
+    if pic_url and "/api/v1/auth/document/profiles/" in pic_url:
+        pic_url = "/api/v1/auth/document/profiles/" + pic_url.split("/api/v1/auth/document/profiles/")[-1]
+
+    dig_url = user.digital_id_path
+    if dig_url and "/api/v1/auth/document/digital_ids/" in dig_url:
+        dig_url = "/api/v1/auth/document/digital_ids/" + dig_url.split("/api/v1/auth/document/digital_ids/")[-1]
+
     return {
         "message": "Profile updated successfully",
         "user": {
@@ -2062,8 +2078,8 @@ def update_profile(
             "date_of_birth": user.date_of_birth,
             "gender": user.gender,
             "address": user.address,
-            "profile_picture": user.profile_picture,
-            "digital_id_path": user.digital_id_path
+            "profile_picture": pic_url,
+            "digital_id_path": dig_url
         }
     }
 

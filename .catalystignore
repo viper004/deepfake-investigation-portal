@@ -1,0 +1,16 @@
+venv
+venv/**
+backend/venv
+backend/venv/**
+.venv
+.venv/**
+.venv_cache
+.venv_cache/**
+uploads/**
+storage/**
+.pytest_cache
+.pytest_cache/**
+__pycache__
+__pycache__/**
+*.pyc
+.env

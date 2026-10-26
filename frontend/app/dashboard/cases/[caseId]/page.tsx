@@ -44,8 +44,7 @@ import {
 } from "lucide-react";
 import WorkspaceSwitcher from "@/components/WorkspaceSwitcher";
 import InvestigatorNotesEditor from "@/components/InvestigatorNotesEditor";
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
+import { BACKEND_URL } from "@/lib/config";
 
 interface ToastType {
   id: string;

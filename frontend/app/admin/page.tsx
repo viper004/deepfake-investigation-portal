@@ -46,8 +46,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import WorkspaceSwitcher from "@/components/WorkspaceSwitcher";
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
+import { BACKEND_URL } from "@/lib/config";
 
 interface UserType {
   id: number;
@@ -287,6 +286,9 @@ export default function AdminDashboard() {
 
   const [userToDelete, setUserToDelete] = useState<UserType | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+
+  const [caseToDelete, setCaseToDelete] = useState<{ id: number; case_number: string; title: string } | null>(null);
+  const [isDeleteCaseModalOpen, setIsDeleteCaseModalOpen] = useState(false);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -1028,6 +1030,39 @@ export default function AdminDashboard() {
     }
   };
 
+  // Action - Delete Case Confirm
+  const handleDeleteCaseConfirm = async () => {
+    if (!caseToDelete || !session?.accessToken) return;
+    try {
+      setIsSubmitting(true);
+      const res = await fetch(`${BACKEND_URL}/api/admin/cases/${caseToDelete.id}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${session.accessToken}`
+        }
+      });
+      if (res.ok) {
+        showToast(`Case ${caseToDelete.case_number} deleted successfully.`, "success");
+        setIsDeleteCaseModalOpen(false);
+        const deletedId = caseToDelete.id;
+        setCaseToDelete(null);
+        if (selectedAdminCaseId === deletedId) {
+          setSelectedAdminCaseId(null);
+          setAdminCaseDetail(null);
+        }
+        fetchAdminCases(true);
+        fetchOverviewStats();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.detail || "Failed to delete case.", "error");
+      }
+    } catch (err) {
+      showToast("Network error. Failed to delete case.", "error");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   // Formatting helpers
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return "N/A";
@@ -1167,7 +1202,7 @@ export default function AdminDashboard() {
                 {session?.user?.email || "superuser@example.com"}
               </span>
               <button 
-                onClick={() => signOut({ callbackUrl: '/' })}
+                onClick={() => signOut({ callbackUrl: typeof window !== "undefined" ? window.location.origin : "/" })}
                 className="p-2 text-[#0a0a0a]/60 hover:text-[#CC2200] hover:bg-[#CC2200]/10 rounded-full transition-colors"
                 title="Sign out"
               >
@@ -2561,9 +2596,22 @@ export default function AdminDashboard() {
                               <div className="text-xs text-[#0a0a0a]/50 mt-0.5">{inv.department || "-"}</div>
                             </td>
                             <td className="py-3 px-6 text-right relative">
-                              <button onClick={() => openEditModal(inv)} className="text-xs font-semibold px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded transition-colors shadow-xs">
-                                Edit Investigator
-                              </button>
+                              <div className="flex items-center justify-end gap-2">
+                                <button onClick={() => openEditModal(inv)} className="text-xs font-semibold px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded transition-colors shadow-xs">
+                                  Edit Investigator
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setUserToDelete(inv);
+                                    setIsDeleteModalOpen(true);
+                                  }}
+                                  className="text-xs font-semibold px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded transition-colors border border-red-200 flex items-center gap-1 shadow-xs"
+                                  title="Completely remove investigator"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                  Remove
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         ))
@@ -2731,6 +2779,20 @@ export default function AdminDashboard() {
                         {adminCaseDetail.case_number}
                       </span>
                       {getCaseStatusBadge(adminCaseDetail.status)}
+                      <button
+                        onClick={() => {
+                          setCaseToDelete({
+                            id: adminCaseDetail.id,
+                            case_number: adminCaseDetail.case_number,
+                            title: adminCaseDetail.title,
+                          });
+                          setIsDeleteCaseModalOpen(true);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 transition-colors shadow-2xs ml-1"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Delete Case
+                      </button>
                     </div>
                   </div>
 
@@ -2994,15 +3056,31 @@ export default function AdminDashboard() {
                               </span>
                             </div>
 
-                            <button
-                              onClick={() => {
-                                setSelectedAdminCaseId(c.id);
-                                fetchAdminCaseDetail(c.id);
-                              }}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-bold bg-[#CC2200] text-white hover:bg-[#b31e00] transition-all shadow-sm flex-shrink-0"
-                            >
-                              View Case <ArrowRight className="h-3.5 w-3.5" />
-                            </button>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              <button
+                                onClick={() => {
+                                  setSelectedAdminCaseId(c.id);
+                                  fetchAdminCaseDetail(c.id);
+                                }}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-bold bg-[#CC2200] text-white hover:bg-[#b31e00] transition-all shadow-sm flex-shrink-0"
+                              >
+                                View Case <ArrowRight className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setCaseToDelete({
+                                    id: c.id,
+                                    case_number: c.case_number,
+                                    title: c.title,
+                                  });
+                                  setIsDeleteCaseModalOpen(true);
+                                }}
+                                title="Delete Case"
+                                className="inline-flex items-center justify-center p-1.5 rounded text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 transition-colors shadow-2xs"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -3776,6 +3854,18 @@ export default function AdminDashboard() {
                   >
                     Reject Request
                   </button>
+                  <button 
+                    onClick={() => {
+                      setIsViewDrawerOpen(false);
+                      setUserToDelete(selectedUser);
+                      setIsDeleteModalOpen(true);
+                    }}
+                    className="py-2 px-3 bg-red-50 hover:bg-red-100 text-red-600 rounded font-semibold text-sm border border-red-200 transition-colors flex items-center justify-center gap-1.5"
+                    title="Completely remove this user"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Delete
+                  </button>
                 </>
               ) : (
                 <>
@@ -3787,6 +3877,18 @@ export default function AdminDashboard() {
                     className="flex-1 text-center py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded font-semibold text-sm border border-slate-300/50 transition-colors"
                   >
                     Edit Profile
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setIsViewDrawerOpen(false);
+                      setUserToDelete(selectedUser);
+                      setIsDeleteModalOpen(true);
+                    }}
+                    className="py-2 px-3.5 bg-red-50 hover:bg-red-100 text-red-600 rounded font-semibold text-sm border border-red-200 transition-colors flex items-center justify-center gap-1.5"
+                    title="Completely remove this user"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Delete User
                   </button>
                   <button 
                     onClick={() => setIsViewDrawerOpen(false)}
@@ -4008,12 +4110,35 @@ export default function AdminDashboard() {
       {isDeleteModalOpen && userToDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-black/60 backdrop-blur-xs" onClick={() => setIsDeleteModalOpen(false)} />
-          <div className="bg-white border border-[#e5e5e5] rounded-lg shadow-xl max-w-md w-full z-10 overflow-hidden relative p-6 animate-scale-up">
-            <h3 className="text-lg font-bold text-[#0a0a0a] text-rose-700">Delete User</h3>
-            <p className="mt-2 text-sm text-[#0a0a0a]/60">
-              Are you sure you want to delete the account for <strong>{userToDelete.full_name}</strong>? This action is permanent and cannot be undone. All user data, reviews, and logs will be orphaned.
+          <div className="bg-white border border-red-200 rounded-xl shadow-2xl max-w-lg w-full z-10 overflow-hidden relative p-6 animate-scale-up">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0 text-red-600">
+                <Trash2 className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-red-700">Completely Remove User</h3>
+                <p className="text-xs text-[#0a0a0a]/50">Permanent system deletion</p>
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-red-50/60 rounded-lg border border-red-200 text-sm mb-4">
+              <div className="font-semibold text-red-900">{userToDelete.full_name}</div>
+              <div className="text-xs text-red-700 mt-0.5">{userToDelete.email} • ID: USR-{userToDelete.id}</div>
+            </div>
+
+            <p className="text-sm text-[#0a0a0a]/70 leading-relaxed mb-3">
+              Are you sure you want to completely remove <strong>{userToDelete.full_name}</strong> from the system?
             </p>
-            <div className="mt-6 flex justify-end gap-3">
+
+            <div className="bg-slate-50 border border-[#e5e5e5] rounded-lg p-3 text-xs text-[#0a0a0a]/60 space-y-1.5 mb-6">
+              <div className="font-semibold text-[#0a0a0a]/80 mb-1">This operation will permanently:</div>
+              <div className="flex items-center gap-1.5">• Purge account credentials and verification records</div>
+              <div className="flex items-center gap-1.5">• Clean up profile assets, documents, and invitations</div>
+              <div className="flex items-center gap-1.5">• Unassign any assigned investigation cases</div>
+              <div className="flex items-center gap-1.5">• Invalidate active sessions immediately</div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2 border-t border-[#e5e5e5]">
               <button 
                 onClick={() => setIsDeleteModalOpen(false)}
                 disabled={isSubmitting}
@@ -4027,7 +4152,60 @@ export default function AdminDashboard() {
                 className="px-4 py-2 bg-[#CC2200] hover:bg-[#CC2200]/90 text-white rounded text-sm font-semibold flex items-center gap-1.5 shadow-sm transition-colors disabled:bg-[#CC2200]/50"
               >
                 {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
-                Delete Permanently
+                Permanently Remove User
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 6. Delete Case Confirmation Modal */}
+      {isDeleteCaseModalOpen && caseToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs" onClick={() => setIsDeleteCaseModalOpen(false)} />
+          <div className="bg-white border border-red-200 rounded-xl shadow-2xl max-w-lg w-full z-10 overflow-hidden relative p-6 animate-scale-up">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0 text-red-600">
+                <Trash2 className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-red-700">Completely Remove Case</h3>
+                <p className="text-xs text-[#0a0a0a]/50">Permanent case and forensic asset deletion</p>
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-red-50/60 rounded-lg border border-red-200 text-sm mb-4">
+              <div className="font-semibold text-red-900">{caseToDelete.case_number}</div>
+              <div className="text-xs text-red-700 mt-0.5">{caseToDelete.title}</div>
+            </div>
+
+            <p className="text-sm text-[#0a0a0a]/70 leading-relaxed mb-3">
+              Are you sure you want to completely remove case <strong>{caseToDelete.case_number}</strong> from the system?
+            </p>
+
+            <div className="bg-slate-50 border border-[#e5e5e5] rounded-lg p-3 text-xs text-[#0a0a0a]/60 space-y-1.5 mb-6">
+              <div className="font-semibold text-[#0a0a0a]/80 mb-1">This operation will permanently:</div>
+              <div className="flex items-center gap-1.5">• Purge case details and forensic investigation records</div>
+              <div className="flex items-center gap-1.5">• Delete all uploaded evidence media and cached files</div>
+              <div className="flex items-center gap-1.5">• Remove all AI analyses, media metadata, and forensic reviews</div>
+              <div className="flex items-center gap-1.5">• Purge investigation notes, documents, and generated reports</div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2 border-t border-[#e5e5e5]">
+              <button 
+                onClick={() => setIsDeleteCaseModalOpen(false)}
+                disabled={isSubmitting}
+                className="px-4 py-2 border border-[#e5e5e5] hover:bg-slate-100 rounded text-sm font-semibold transition-colors disabled:opacity-55"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleDeleteCaseConfirm}
+                disabled={isSubmitting}
+                className="px-4 py-2 bg-[#CC2200] hover:bg-[#CC2200]/90 text-white rounded text-sm font-semibold flex items-center gap-1.5 shadow-sm transition-colors disabled:bg-[#CC2200]/50"
+              >
+                {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
+                Permanently Remove Case
               </button>
             </div>
           </div>
