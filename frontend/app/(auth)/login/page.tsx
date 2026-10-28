@@ -129,39 +129,28 @@ export default function LoginPage() {
     setError("");
 
     try {
-      const backendUrl = BACKEND_URL;
-      const res = await fetch(`${backendUrl}/api/v1/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.detail || "Authentication failed");
-        setLoading(false);
-        return;
-      }
-
+      const cleanEmail = email.trim().toLowerCase();
       const signInResult = await signIn("credentials", {
-        email,
+        email: cleanEmail,
         password,
         redirect: false,
       });
 
       if (signInResult?.error) {
         setError("Invalid email or password");
-      } else {
-        if (email === "superuser@example.com") {
-          router.push("/admin");
-        } else {
-          router.push("/dashboard");
-        }
-        router.refresh();
+        setLoading(false);
+        return;
       }
-    } catch (err) {
-      setError("An unexpected error occurred. Please try again.");
+
+      if (cleanEmail === "superuser@example.com") {
+        router.push("/admin");
+      } else {
+        router.push("/dashboard");
+      }
+      router.refresh();
+    } catch (err: any) {
+      console.error("Login authentication error:", err);
+      setError(err?.message || "Invalid email or password");
     } finally {
       setLoading(false);
     }

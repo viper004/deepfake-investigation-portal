@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Header, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, Header, BackgroundTasks, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, desc, func
 from typing import Optional, List
@@ -64,6 +64,29 @@ def get_current_admin(authorization: str = Header(None)):
             detail="Invalid or expired session token"
         )
 
+def get_frontend_base_url(request: Request) -> str:
+    origin = request.headers.get("origin")
+    if not origin:
+        referer = request.headers.get("referer")
+        if referer:
+            try:
+                from urllib.parse import urlparse
+                p = urlparse(referer)
+                origin = f"{p.scheme}://{p.netloc}"
+            except Exception:
+                origin = None
+
+    if origin:
+        origin_clean = origin.rstrip("/")
+        if "localhost" in origin_clean or "127.0.0.1" in origin_clean:
+            return origin_clean
+        if "onslate.in" in origin_clean or "onslate.com" in origin_clean:
+            return "https://aurora.onslate.in"
+
+    if os.getenv("X_ZOHO_CATALYST_LISTEN_PORT"):
+        return "https://aurora.onslate.in"
+    return os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
+
 class UserUpdate(BaseModel):
     full_name: str
     email: EmailStr
@@ -85,9 +108,14 @@ class BulkInvitationRequest(BaseModel):
     invitations: List[InvitationRequest]
 
 @router.post("/invitations")
-def create_invitations(req: BulkInvitationRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db), admin: dict = Depends(get_current_admin)):
+def create_invitations(req: BulkInvitationRequest, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db), admin: dict = Depends(get_current_admin)):
+    frontend_base_url = get_frontend_base_url(request)
     admin_sub = admin.get("sub")
     created_by_id = int(admin_sub) if admin_sub and str(admin_sub).isdigit() else None
+    if created_by_id is None and admin.get("email"):
+        admin_user = db.query(User).filter(func.lower(User.email) == admin.get("email").strip().lower()).first()
+        if admin_user:
+            created_by_id = admin_user.id
     
     sent_count = 0
     skipped_existing = 0
@@ -97,32 +125,65 @@ def create_invitations(req: BulkInvitationRequest, background_tasks: BackgroundT
     seen_emails = set()
     
     for inv in req.invitations:
-        email_lower = inv.email.lower()
-        if email_lower in seen_emails:
+        email_clean = inv.email.strip().lower()
+        if not email_clean:
+            continue
+        if email_clean in seen_emails:
             skipped_duplicate += 1
             continue
-        seen_emails.add(email_lower)
+        seen_emails.add(email_clean)
         
-        existing_user = db.query(User).filter(User.email == inv.email).first()
-        if existing_user:
+        # Check if already an ACTIVE Investigator (role_id == 2)
+        existing_user = db.query(User).filter(func.lower(User.email) == email_clean).first()
+        if existing_user and existing_user.role_id == 2:
             skipped_existing += 1
             continue
             
-        pending_invite = db.query(InvestigatorInvitation).filter(InvestigatorInvitation.email == inv.email, InvestigatorInvitation.status == "PENDING").first()
-        if pending_invite:
-            skipped_pending += 1
-            continue
-            
+        # Check if an invitation is already pending, delivered, or failed
+        pending_invite = db.query(InvestigatorInvitation).filter(
+            func.lower(InvestigatorInvitation.email) == email_clean,
+            func.upper(InvestigatorInvitation.status).in_(["PENDING", "DELIVERED", "FAILED"])
+        ).first()
+        
         token = uuid.uuid4().hex
+        
+        if pending_invite:
+            # Refresh and resend the invitation instead of silently dropping
+            pending_invite.token = token
+            pending_invite.full_name = inv.full_name.strip() or pending_invite.full_name
+            if inv.phone:
+                pending_invite.phone = inv.phone.strip()
+            pending_invite.status = "Pending"
+            pending_invite.delivery_status = "Pending"
+            pending_invite.expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+            if existing_user and existing_user.role_id != 2:
+                pending_invite.account_id = existing_user.id
+                pending_invite.invitation_type = "Upgrade Investigator"
+                
+            log = InvitationLog(
+                invitation_id=pending_invite.id,
+                event_type="Invitation Resent",
+                status="SUCCESS",
+                performed_by=created_by_id,
+                recipient_email=email_clean,
+                message="Invitation refreshed and resent by administrator."
+            )
+            db.add(log)
+            db.flush()
+            sent_count += 1
+            background_tasks.add_task(send_investigator_invitation_email, email_clean, pending_invite.full_name, token, pending_invite.id, frontend_base_url)
+            continue
+
         invite = InvestigatorInvitation(
-            full_name=inv.full_name,
-            email=inv.email,
-            phone=inv.phone,
+            full_name=inv.full_name.strip(),
+            email=email_clean,
+            phone=inv.phone.strip() if inv.phone else None,
             token=token,
             status="Pending",
-            invitation_type="New Investigator",
+            invitation_type="Upgrade Investigator" if (existing_user and existing_user.role_id != 2) else "New Investigator",
             delivery_status="Pending",
             send_attempts=0,
+            account_id=existing_user.id if (existing_user and existing_user.role_id != 2) else None,
             expires_at=datetime.now(timezone.utc) + timedelta(days=7),
             created_by=created_by_id
         )
@@ -134,13 +195,13 @@ def create_invitations(req: BulkInvitationRequest, background_tasks: BackgroundT
             event_type="Invitation Created",
             status="SUCCESS",
             performed_by=created_by_id,
-            recipient_email=inv.email,
+            recipient_email=email_clean,
             message="Initial invitation record created."
         )
         db.add(log)
         
         sent_count += 1
-        background_tasks.add_task(send_investigator_invitation_email, inv.email, inv.full_name, token, invite.id)
+        background_tasks.add_task(send_investigator_invitation_email, email_clean, invite.full_name, token, invite.id, frontend_base_url)
         
     db.commit()
     
@@ -181,15 +242,21 @@ def list_invitation_logs(db: Session = Depends(get_db), admin: dict = Depends(ge
     } for l in logs]
 
 @router.post("/invitations/{invite_id}/resend")
-def resend_invitation(invite_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db), admin: dict = Depends(get_current_admin)):
+def resend_invitation(invite_id: int, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db), admin: dict = Depends(get_current_admin)):
+    frontend_base_url = get_frontend_base_url(request)
     admin_sub = admin.get("sub")
     created_by_id = int(admin_sub) if admin_sub and str(admin_sub).isdigit() else None
+    if created_by_id is None and admin.get("email"):
+        admin_user = db.query(User).filter(func.lower(User.email) == admin.get("email").strip().lower()).first()
+        if admin_user:
+            created_by_id = admin_user.id
     
     invite = db.query(InvestigatorInvitation).filter_by(id=invite_id).first()
     if not invite:
         raise HTTPException(status_code=404, detail="Invitation not found")
         
-    if invite.status not in ["Pending", "Expired", "Delivered", "Failed"]:
+    current_status = (invite.status or "").upper()
+    if current_status not in ["PENDING", "EXPIRED", "DELIVERED", "FAILED"]:
         raise HTTPException(status_code=400, detail="Cannot resend an invitation in this status")
         
     invite.expires_at = datetime.now(timezone.utc) + timedelta(days=7)
@@ -207,19 +274,24 @@ def resend_invitation(invite_id: int, background_tasks: BackgroundTasks, db: Ses
     db.add(log)
     db.commit()
     
-    background_tasks.add_task(send_investigator_invitation_email, invite.email, invite.full_name, invite.token, invite.id)
+    background_tasks.add_task(send_investigator_invitation_email, invite.email, invite.full_name, invite.token, invite.id, frontend_base_url)
     return {"message": "Invitation resent"}
 
 @router.post("/invitations/{invite_id}/cancel")
 def cancel_invitation(invite_id: int, db: Session = Depends(get_db), admin: dict = Depends(get_current_admin)):
     admin_sub = admin.get("sub")
     created_by_id = int(admin_sub) if admin_sub and str(admin_sub).isdigit() else None
+    if created_by_id is None and admin.get("email"):
+        admin_user = db.query(User).filter(func.lower(User.email) == admin.get("email").strip().lower()).first()
+        if admin_user:
+            created_by_id = admin_user.id
     
     invite = db.query(InvestigatorInvitation).filter_by(id=invite_id).first()
     if not invite:
         raise HTTPException(status_code=404, detail="Invitation not found")
         
-    if invite.status != "Pending" and invite.status != "Delivered" and invite.status != "Failed":
+    current_status = (invite.status or "").upper()
+    if current_status not in ["PENDING", "DELIVERED", "FAILED"]:
         raise HTTPException(status_code=400, detail="Cannot cancel an invitation that is already accepted or expired")
         
     invite.status = "Cancelled"
@@ -237,28 +309,60 @@ def cancel_invitation(invite_id: int, db: Session = Depends(get_db), admin: dict
     return {"message": "Invitation cancelled"}
 
 @router.post("/users/{account_id}/upgrade-investigator")
-def upgrade_user(account_id: int, db: Session = Depends(get_db), admin: dict = Depends(get_current_admin)):
+def upgrade_user(account_id: int, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db), admin: dict = Depends(get_current_admin)):
+    frontend_base_url = get_frontend_base_url(request)
     user = db.query(User).filter(User.id == account_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
         
     token = uuid.uuid4().hex
     admin_sub = admin.get("sub")
-    created_by_id = int(admin_sub) if str(admin_sub).isdigit() else None
+    created_by_id = int(admin_sub) if admin_sub and str(admin_sub).isdigit() else None
+    if created_by_id is None and admin.get("email"):
+        admin_user = db.query(User).filter(func.lower(User.email) == admin.get("email").strip().lower()).first()
+        if admin_user:
+            created_by_id = admin_user.id
     
-    invite = InvestigatorInvitation(
-        full_name=user.full_name,
-        email=user.email,
-        phone=user.phone,
-        token=token,
-        status="PENDING",
-        account_id=user.id,
-        expires_at=datetime.now(timezone.utc) + timedelta(days=7),
-        created_by=created_by_id
+    # Check if existing pending invite exists for this user
+    existing_invite = db.query(InvestigatorInvitation).filter(
+        InvestigatorInvitation.account_id == user.id,
+        func.upper(InvestigatorInvitation.status).in_(["PENDING", "DELIVERED"])
+    ).first()
+    
+    if existing_invite:
+        invite = existing_invite
+        invite.token = token
+        invite.status = "Pending"
+        invite.delivery_status = "Pending"
+        invite.expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    else:
+        invite = InvestigatorInvitation(
+            full_name=user.full_name,
+            email=user.email.strip().lower(),
+            phone=user.phone,
+            token=token,
+            status="Pending",
+            invitation_type="Upgrade Investigator",
+            delivery_status="Pending",
+            account_id=user.id,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+            created_by=created_by_id
+        )
+        db.add(invite)
+        
+    db.flush()
+    
+    log = InvitationLog(
+        invitation_id=invite.id,
+        event_type="Invitation Created",
+        status="SUCCESS",
+        performed_by=created_by_id,
+        recipient_email=user.email,
+        message="Investigator upgrade invitation created."
     )
-    db.add(invite)
+    db.add(log)
     db.commit()
-    print(f"[Email Simulation] Sending upgrade link to {user.email} with token {token}")
+    background_tasks.add_task(send_investigator_invitation_email, user.email, user.full_name, token, invite.id, frontend_base_url)
     return {"message": "Upgrade invitation sent successfully"}
 
 @router.get("/users")
@@ -273,7 +377,7 @@ def get_users(
     admin: dict = Depends(get_current_admin)
 ):
     # Only return users whose status is Approved or Active
-    query = db.query(User).filter(User.status.in_(["APPROVED", "ACTIVE"]))
+    query = db.query(User).filter(func.upper(User.status).in_(["APPROVED", "ACTIVE"]))
 
     if search:
         search_filter = f"%{search}%"
@@ -289,7 +393,7 @@ def get_users(
         query = query.filter(User.role_id == role_id)
         
     if status_filter:
-        query = query.filter(User.status == status_filter.upper())
+        query = query.filter(func.upper(User.status) == status_filter.upper())
 
     if sort_by == "newest":
         query = query.order_by(desc(User.created_at))

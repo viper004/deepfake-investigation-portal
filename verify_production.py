@@ -6,7 +6,7 @@ import os
 import subprocess
 
 BASE_URL = "https://dip-backend-50047170003.development.catalystappsail.in"
-FRONTEND_URL = "https://dip-frontend-npczgoxg.onslate.in"
+FRONTEND_URL = "https://aurora.onslate.in"
 INFERENCE_URL = "http://127.0.0.1:8001"
 SAMPLE_IMG = "/home/jagansyam/Desktop/deepfake-investigation-portal/sample_evidence.jpg"
 

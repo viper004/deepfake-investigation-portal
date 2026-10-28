@@ -364,9 +364,12 @@ export default function AdminDashboard() {
       });
       if (res.ok) {
         const data = await res.json();
-        setUsers(data.users);
-        setUsersTotal(data.total);
+        setUsers(data.users || []);
+        setUsersTotal(data.total || 0);
         setActiveUsersLoaded(true);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        showToast(errData.detail || `Error fetching users list (${res.status}).`, "error");
       }
     } catch (err) {
       console.error("Failed to fetch users:", err);
@@ -389,8 +392,11 @@ export default function AdminDashboard() {
       });
       if (res.ok) {
         const data = await res.json();
-        setPendingUsers(data);
+        setPendingUsers(data || []);
         setPendingUsersLoaded(true);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        showToast(errData.detail || `Error fetching pending requests (${res.status}).`, "error");
       }
     } catch (err) {
       console.error("Failed to fetch pending users:", err);
@@ -422,9 +428,12 @@ export default function AdminDashboard() {
       });
       if (res.ok) {
         const data = await res.json();
-        setInvestigators(data.users);
-        setInvestigatorsTotal(data.total);
+        setInvestigators(data.users || []);
+        setInvestigatorsTotal(data.total || 0);
         setInvestigatorsLoaded(true);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        showToast(errData.detail || `Error fetching active investigators (${res.status}).`, "error");
       }
     } catch (err) {
       showToast("Error fetching active investigators.", "error");
@@ -786,7 +795,14 @@ export default function AdminDashboard() {
         body: JSON.stringify({ invitations: [inviteForm] })
       });
       if (res.ok) {
-        showToast("Invitation sent successfully");
+        const data = await res.json();
+        if (data.sent > 0) {
+          showToast(`Invitation sent successfully to ${inviteForm.email}`, "success");
+        } else if (data.skipped_existing > 0) {
+          showToast(`User ${inviteForm.email} is already an active investigator.`, "error");
+        } else {
+          showToast("Invitation processed.", "success");
+        }
         setIsInviteModalOpen(false);
         setInviteForm({ full_name: "", email: "", phone: "" });
         fetchInvitations(true);
@@ -898,7 +914,7 @@ export default function AdminDashboard() {
     try {
       setIsSubmitting(true);
       setBulkInviteResult(null);
-      const res = await fetch(`${BACKEND_URL}/api/admin/invitations`, {
+      const res = await fetch(`${BACKEND_URL}/api/v1/admin/invitations`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -2446,13 +2462,22 @@ export default function AdminDashboard() {
                   <h2 className="text-2xl font-bold text-[#0a0a0a]">Investigator Management</h2>
                   <p className="text-sm text-[#0a0a0a]/60 mt-1">Manage active investigators, invite new investigators, and review pending verification requests.</p>
                 </div>
-                <button
-                  onClick={() => setIsBulkInviteModalOpen(true)}
-                  className="px-5 py-2.5 bg-[#CC2200] hover:bg-red-700 text-white font-semibold rounded-md shadow-sm transition-colors flex items-center gap-2 whitespace-nowrap"
-                >
-                  <Plus className="w-5 h-5" />
-                  Invite Investigators
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setIsInviteModalOpen(true)}
+                    className="px-4 py-2.5 bg-[#CC2200] hover:bg-red-700 text-white font-semibold rounded-md shadow-sm transition-colors flex items-center gap-2 whitespace-nowrap"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Invite Investigator
+                  </button>
+                  <button
+                    onClick={() => setIsBulkInviteModalOpen(true)}
+                    className="px-4 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-semibold rounded-md shadow-sm transition-colors flex items-center gap-2 whitespace-nowrap"
+                  >
+                    <Send className="w-4 h-4" />
+                    Bulk Invite
+                  </button>
+                </div>
               </div>
 
               {/* Tabs */}
@@ -2557,13 +2582,22 @@ export default function AdminDashboard() {
                               <Users className="h-12 w-12 text-[#0a0a0a]/20 mb-4" />
                               <h3 className="text-lg font-semibold text-[#0a0a0a]/80 mb-1">No active investigators</h3>
                               <p className="text-sm text-[#0a0a0a]/50 mb-6 text-center">No investigators have been added yet. Invite investigators to start assigning cases.</p>
-                              <button
-                                onClick={() => setIsBulkInviteModalOpen(true)}
-                                className="px-4 py-2 bg-[#CC2200] hover:bg-red-700 text-white font-semibold rounded-md shadow-sm transition-colors flex items-center gap-2"
-                              >
-                                <Plus className="w-4 h-4" />
-                                Invite Investigators
-                              </button>
+                              <div className="flex items-center justify-center gap-3">
+                                <button
+                                  onClick={() => setIsInviteModalOpen(true)}
+                                  className="px-4 py-2 bg-[#CC2200] hover:bg-red-700 text-white font-semibold rounded-md shadow-sm transition-colors flex items-center gap-2"
+                                >
+                                  <Plus className="w-4 h-4" />
+                                  Invite Investigator
+                                </button>
+                                <button
+                                  onClick={() => setIsBulkInviteModalOpen(true)}
+                                  className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold rounded-md shadow-sm transition-colors flex items-center gap-2"
+                                >
+                                  <Send className="w-4 h-4" />
+                                  Bulk Invite
+                                </button>
+                              </div>
                             </div>
                           </td>
                         </tr>

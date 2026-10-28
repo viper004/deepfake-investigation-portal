@@ -2,7 +2,7 @@ import urllib.request
 import re
 import json
 
-SLATE_URL = "https://dip-frontend-npczgoxg.onslate.in"
+SLATE_URL = "https://aurora.onslate.in"
 LOGIN_PAGE = f"{SLATE_URL}/login"
 BACKEND_URL = "https://dip-backend-50047170003.development.catalystappsail.in"
 

@@ -516,7 +516,7 @@ def register_investigator(
 ):
     invitation = db.query(InvestigatorInvitation).filter(
         InvestigatorInvitation.token == invitation_token,
-        InvestigatorInvitation.status == "PENDING"
+        func.upper(InvestigatorInvitation.status).in_(["PENDING", "DELIVERED"])
     ).first()
     
     if not invitation:
@@ -525,7 +525,8 @@ def register_investigator(
             detail="Invalid or expired invitation token"
         )
     
-    if invitation.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+    expires_at = invitation.expires_at if invitation.expires_at.tzinfo else invitation.expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
         invitation.status = "EXPIRED"
         db.commit()
         raise HTTPException(
@@ -629,13 +630,14 @@ def register_investigator(
 def verify_invitation(token: str, db: Session = Depends(get_db)):
     invitation = db.query(InvestigatorInvitation).filter(
         InvestigatorInvitation.token == token,
-        InvestigatorInvitation.status == "PENDING"
+        func.upper(InvestigatorInvitation.status).in_(["PENDING", "DELIVERED"])
     ).first()
     
     if not invitation:
         raise HTTPException(status_code=400, detail="Invalid or expired invitation token")
         
-    if invitation.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+    expires_at = invitation.expires_at if invitation.expires_at.tzinfo else invitation.expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
         invitation.status = "EXPIRED"
         db.commit()
         raise HTTPException(status_code=400, detail="Invitation token has expired")

@@ -45,6 +45,7 @@ import {
   History,
   Maximize2,
   AlertTriangle,
+  AlertCircle,
   MessageSquare,
   MessageCircle,
   Paperclip,
@@ -331,23 +332,93 @@ function UserDashboardContent() {
   const [isAlreadyClaimedModalOpen, setIsAlreadyClaimedModalOpen] = useState(false);
   const [viewCaseModalOpen, setViewCaseModalOpen] = useState(false);
   const [caseToPreview, setCaseToPreview] = useState<any | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [claimingCaseId, setClaimingCaseId] = useState<number | null>(null);
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const activePreviewIdRef = useRef<number | null>(null);
+
+  const closeViewCaseModal = useCallback(() => {
+    if (claimingCaseId !== null) return;
+    if (previewAbortRef.current) {
+      previewAbortRef.current.abort();
+    }
+    activePreviewIdRef.current = null;
+    setViewCaseModalOpen(false);
+    setCaseToPreview(null);
+    setPreviewLoading(false);
+    setPreviewError(null);
+  }, [claimingCaseId]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape" && viewCaseModalOpen && claimingCaseId === null) {
-        setViewCaseModalOpen(false);
-        setCaseToPreview(null);
+        closeViewCaseModal();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [viewCaseModalOpen, claimingCaseId]);
+  }, [viewCaseModalOpen, claimingCaseId, closeViewCaseModal]);
 
-  const handleOpenViewCaseModal = (c: any) => {
+  const handleOpenViewCaseModal = useCallback(async (c: any) => {
+    if (!c || !c.id) return;
+    const targetId = Number(c.id);
+    activePreviewIdRef.current = targetId;
+
+    if (previewAbortRef.current) {
+      previewAbortRef.current.abort();
+    }
+    const abortController = new AbortController();
+    previewAbortRef.current = abortController;
+
+    // Immediately open modal with existing summary data for responsive UX
     setCaseToPreview(c);
     setViewCaseModalOpen(true);
-  };
+    setPreviewLoading(true);
+    setPreviewError(null);
+
+    if (!session?.accessToken) {
+      setPreviewLoading(false);
+      return;
+    }
+
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/v1/user/cases/${targetId}`, {
+        headers: { "Authorization": `Bearer ${session.accessToken}` },
+        signal: abortController.signal
+      });
+
+      if (activePreviewIdRef.current !== targetId) return;
+
+      if (res.ok) {
+        const fullDetail = await res.json();
+        setCaseToPreview((prev: any) => ({
+          ...prev,
+          ...fullDetail,
+          creator_name: fullDetail.creator_name || prev?.creator_name || "Anonymous Reporter",
+          assigned_investigator_name: fullDetail.assigned_investigator_name || fullDetail.assigned_expert_name || prev?.assigned_investigator_name || prev?.assigned_expert_name,
+          evidence_count: fullDetail.evidence?.length ?? fullDetail.evidence_count ?? prev?.evidence_count ?? 0,
+        }));
+        setPreviewError(null);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        const msg = errData.detail || "Unable to fetch full case details.";
+        if (!c.title && !c.case_number) {
+          setPreviewError(msg);
+        }
+      }
+    } catch (err: any) {
+      if (err.name === "AbortError") return;
+      console.error("Error fetching case preview details:", err?.message || err);
+      if (!c.title && !c.case_number) {
+        setPreviewError("Network request failed while loading case details.");
+      }
+    } finally {
+      if (activePreviewIdRef.current === targetId) {
+        setPreviewLoading(false);
+      }
+    }
+  }, [session?.accessToken]);
 
   const handleClaimFromModal = async () => {
     if (!caseToPreview || !session?.accessToken || claimingCaseId !== null) return;
@@ -361,20 +432,24 @@ function UserDashboardContent() {
 
       if (res.ok) {
         showToast("Investigation claimed and assigned to your workload!", "success");
-        setViewCaseModalOpen(false);
-        setCaseToPreview(null);
+        closeViewCaseModal();
         fetchOpenCases();
         fetchCases();
+        fetchAllCases();
         fetchStats();
-        window.open(`/dashboard/cases/${targetId}`, "_blank", "noopener,noreferrer");
+        // Transition directly into workspace view
+        setSelectedCaseId(targetId);
+        fetchCaseDetail(targetId);
+        fetchScanResult(targetId);
       } else {
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         const detailStr = typeof data.detail === "string" ? data.detail : (data.detail?.message || JSON.stringify(data.detail));
         if (res.status === 400 && detailStr.includes("LIMIT_REACHED")) {
           setIsLimitModalOpen(true);
         } else if (res.status === 409 || detailStr.includes("already been assigned")) {
           showToast("This case has already been assigned to another investigator.", "error");
           fetchOpenCases();
+          fetchAllCases();
         } else {
           showToast(detailStr || "Failed to claim case", "error");
         }
@@ -3043,6 +3118,29 @@ function UserDashboardContent() {
           )}
 
           {/* ──────────────── 2b. CASE DETAILS VIEW ──────────────── */}
+          {selectedCaseId && !caseDetail && (
+            <div className="p-12 text-center bg-white border border-[#e5e5e5] rounded-xl shadow-sm space-y-4 animate-scale-up">
+              {caseDetailLoading ? (
+                <div className="flex flex-col items-center justify-center gap-3">
+                  <Loader2 className="h-8 w-8 animate-spin text-[#CC2200]" />
+                  <p className="text-sm font-semibold text-[#0a0a0a]/70">Loading case workspace...</p>
+                </div>
+              ) : (
+                <div className="space-y-3 max-w-md mx-auto">
+                  <AlertCircle className="h-10 w-10 text-rose-600 mx-auto" />
+                  <h4 className="text-base font-bold text-[#0a0a0a]">Unable to load case workspace</h4>
+                  <p className="text-xs text-[#0a0a0a]/60">The requested case details could not be retrieved, or you may lack authorization to access this workspace.</p>
+                  <button
+                    onClick={() => { setSelectedCaseId(null); setCaseDetail(null); }}
+                    className="mt-2 px-4 py-2 bg-slate-800 text-white rounded-md text-xs font-bold hover:bg-[#CC2200] transition-colors cursor-pointer"
+                  >
+                    &larr; Return to Cases
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           {selectedCaseId && caseDetail && (
             <div className="space-y-6 animate-scale-up text-left">
               
@@ -3788,8 +3886,16 @@ function UserDashboardContent() {
                       </thead>
                       <tbody className="divide-y divide-[#e5e5e5]">
                         {allCases.map((c: any) => {
-                          const isAssignedToMe = (c.is_assigned_to_me || c.assigned_expert_id === session?.user?.id || c.assigned_investigator_id === session?.user?.id);
-                          const isUnassigned = (c.status === "CASE_FILED" && !c.assigned_expert_id && !c.assigned_investigator_id);
+                          const currentUserIdStr = session?.user?.id ? String(session.user.id) : null;
+                          const isAssignedToMe = Boolean(
+                            c.is_assigned_to_me ||
+                            (currentUserIdStr && (
+                              String(c.assigned_expert_id) === currentUserIdStr ||
+                              String(c.assigned_investigator_id) === currentUserIdStr
+                            ))
+                          );
+                          const isUnassigned = Boolean(!c.assigned_expert_id && !c.assigned_investigator_id);
+
                           return (
                             <tr key={c.id} className="hover:bg-slate-50/50 transition-colors">
                               <td className="py-3.5 px-4 font-mono font-bold text-[#CC2200]">{c.case_number}</td>
@@ -3817,31 +3923,39 @@ function UserDashboardContent() {
                                 {c.submitted_at ? new Date(c.submitted_at).toLocaleDateString("en-GB") : (c.created_at ? new Date(c.created_at).toLocaleDateString("en-GB") : "N/A")}
                               </td>
                               <td className="py-3.5 px-4 text-center">
-                                {isAssignedToMe ? (
-                                  <button
-                                    onClick={() => setSelectedCaseId(c.id)}
-                                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded bg-[#CC2200] hover:opacity-90 text-white text-xs font-bold transition-colors shadow-xs cursor-pointer"
-                                  >
-                                    <FolderSearch className="h-3.5 w-3.5" />
-                                    Open Workspace
-                                  </button>
-                                ) : isUnassigned ? (
+                                <div className="flex items-center justify-center gap-1.5">
                                   <button
                                     onClick={() => handleOpenViewCaseModal(c)}
-                                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded bg-slate-800 hover:bg-[#CC2200] text-white text-xs font-bold transition-colors shadow-xs cursor-pointer"
-                                  >
-                                    <Eye className="h-3.5 w-3.5" />
-                                    View / Claim Case
-                                  </button>
-                                ) : (
-                                  <button
-                                    onClick={() => setSelectedCaseId(c.id)}
-                                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold transition-colors shadow-xs cursor-pointer"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold transition-colors shadow-xs cursor-pointer"
+                                    title="View Case Details Modal"
                                   >
                                     <Eye className="h-3.5 w-3.5" />
                                     View Details
                                   </button>
-                                )}
+                                  {isAssignedToMe ? (
+                                    <button
+                                      onClick={() => {
+                                        setSelectedCaseId(c.id);
+                                        fetchCaseDetail(c.id);
+                                        fetchScanResult(c.id);
+                                      }}
+                                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#CC2200] hover:opacity-90 text-white text-xs font-bold transition-colors shadow-xs cursor-pointer"
+                                      title="Open Case Investigation Workspace"
+                                    >
+                                      <FolderSearch className="h-3.5 w-3.5" />
+                                      Workspace
+                                    </button>
+                                  ) : isUnassigned ? (
+                                    <button
+                                      onClick={() => handleOpenViewCaseModal(c)}
+                                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-800 hover:bg-[#CC2200] text-white text-xs font-bold transition-colors shadow-xs cursor-pointer"
+                                      title="Claim this unassigned case"
+                                    >
+                                      <ShieldCheck className="h-3.5 w-3.5" />
+                                      Claim
+                                    </button>
+                                  ) : null}
+                                </div>
                               </td>
                             </tr>
                           );
@@ -5153,8 +5267,7 @@ function UserDashboardContent() {
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in text-left"
           onClick={() => {
             if (claimingCaseId === null) {
-              setViewCaseModalOpen(false);
-              setCaseToPreview(null);
+              closeViewCaseModal();
             }
           }}
         >
@@ -5169,7 +5282,22 @@ function UserDashboardContent() {
                   <Eye className="h-5 w-5 text-[#CC2200]" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-lg text-[#0a0a0a]">Case Details</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-lg text-[#0a0a0a]">Case Details</h3>
+                    {caseToPreview.status && (
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        caseToPreview.status === "CLOSED"
+                          ? "bg-slate-100 text-slate-700"
+                          : caseToPreview.status === "CASE_UNDER_INVESTIGATION"
+                          ? "bg-blue-100 text-blue-700"
+                          : caseToPreview.status === "CASE_FILED"
+                          ? "bg-amber-100 text-amber-700"
+                          : "bg-gray-100 text-gray-700"
+                      }`}>
+                        {caseToPreview.status}
+                      </span>
+                    )}
+                  </div>
                   {caseToPreview.case_number && (
                     <p className="text-xs font-mono font-bold text-[#CC2200]">
                       Case #{caseToPreview.case_number}
@@ -5179,12 +5307,8 @@ function UserDashboardContent() {
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  if (claimingCaseId === null) {
-                    setViewCaseModalOpen(false);
-                    setCaseToPreview(null);
-                  }
-                }}
+                onClick={closeViewCaseModal}
+                disabled={claimingCaseId !== null}
                 className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
                 aria-label="Close modal"
               >
@@ -5194,11 +5318,41 @@ function UserDashboardContent() {
 
             {/* Modal Scrollable Content */}
             <div className="space-y-4 overflow-y-auto pr-1 flex-1 text-sm text-[#0a0a0a]">
-              {/* Title */}
+              {/* Optional Loading Indicator */}
+              {previewLoading && (
+                <div className="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-md text-xs text-slate-600">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-[#CC2200]" />
+                  <span>Retrieving updated evidence records and case details...</span>
+                </div>
+              )}
+
+              {/* Optional Error Alert */}
+              {previewError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-center justify-between text-xs text-rose-700">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
+                    <span>{previewError}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenViewCaseModal(caseToPreview)}
+                    className="px-2.5 py-1 bg-white border border-rose-300 rounded font-bold hover:bg-rose-100 transition-colors cursor-pointer"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {/* Title & Category */}
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/50 mb-1">
-                  Title
-                </label>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/50">
+                    Title
+                  </label>
+                  <span className="text-[11px] font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                    {caseToPreview.category || "Forensic Investigation"}
+                  </span>
+                </div>
                 <p className="font-bold text-[#0a0a0a] text-base leading-snug">
                   {caseToPreview.title || "Untitled Case"}
                 </p>
@@ -5209,71 +5363,104 @@ function UserDashboardContent() {
                 <label className="block text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/50 mb-1">
                   Description
                 </label>
-                <div className="bg-slate-50 p-3.5 rounded-lg border border-[#e5e5e5] text-xs text-[#0a0a0a]/80 whitespace-pre-wrap leading-relaxed">
+                <div className="bg-slate-50 p-3.5 rounded-lg border border-[#e5e5e5] text-xs text-[#0a0a0a]/80 whitespace-pre-wrap leading-relaxed max-h-32 overflow-y-auto">
                   {caseToPreview.description || "No description provided."}
                 </div>
               </div>
 
-              {/* Dates Grid: Date of Issue & Date of Incident */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Key Case Details Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 p-3.5 rounded-lg border border-[#e5e5e5] text-xs">
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/50 mb-1">
-                    Date of Issue
-                  </label>
-                  <p className="font-semibold text-xs text-[#0a0a0a]/90">
-                    {caseToPreview.submitted_at
-                      ? new Date(caseToPreview.submitted_at).toLocaleDateString("en-GB")
-                      : caseToPreview.created_at
-                      ? new Date(caseToPreview.created_at).toLocaleDateString("en-GB")
-                      : "N/A"}
-                  </p>
+                  <span className="text-[10px] font-bold uppercase text-[#0a0a0a]/50 block">Reported By</span>
+                  <span className="font-semibold text-slate-800">{caseToPreview.creator_name || "Anonymous Reporter"}</span>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/50 mb-1">
-                    Date of Incident
-                  </label>
-                  <p className="font-semibold text-xs text-[#0a0a0a]/90">
-                    {caseToPreview.incident_date
-                      ? new Date(caseToPreview.incident_date).toLocaleDateString("en-GB")
-                      : "N/A"}
-                  </p>
+                  <span className="text-[10px] font-bold uppercase text-[#0a0a0a]/50 block">Assigned Investigator</span>
+                  {caseToPreview.assigned_investigator_name || caseToPreview.assigned_expert_name ? (
+                    <span className="font-semibold text-blue-700 flex items-center gap-1">
+                      <ShieldCheck className="h-3 w-3" />
+                      {caseToPreview.assigned_investigator_name || caseToPreview.assigned_expert_name}
+                      {Boolean(
+                        caseToPreview.is_assigned_to_me ||
+                        (session?.user?.id && (
+                          String(caseToPreview.assigned_expert_id) === String(session.user.id) ||
+                          String(caseToPreview.assigned_investigator_id) === String(session.user.id)
+                        ))
+                      ) && <span className="text-[9px] bg-blue-100 text-blue-800 px-1 py-0.2 rounded font-bold">You</span>}
+                    </span>
+                  ) : (
+                    <span className="text-amber-600 font-semibold italic flex items-center gap-1">
+                      <Clock className="h-3 w-3" />
+                      Unassigned (Available)
+                    </span>
+                  )}
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-[#0a0a0a]/50 block">Date of Incident</span>
+                  <span className="font-semibold text-slate-800">
+                    {caseToPreview.incident_date ? new Date(caseToPreview.incident_date).toLocaleDateString("en-GB") : "N/A"}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-[#0a0a0a]/50 block">Date Submitted</span>
+                  <span className="font-semibold text-slate-800">
+                    {caseToPreview.submitted_at
+                      ? new Date(caseToPreview.submitted_at).toLocaleDateString("en-GB")
+                      : (caseToPreview.created_at ? new Date(caseToPreview.created_at).toLocaleDateString("en-GB") : "N/A")}
+                  </span>
                 </div>
               </div>
 
-              {/* Grid: Case User & Evidences Uploaded */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/50 mb-1">
-                    Case User
-                  </label>
-                  <p className="font-semibold text-xs text-[#0a0a0a]/90">
-                    {caseToPreview.creator_name || "Anonymous Reporter"}
+              {/* Evidence Section */}
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/50 mb-1.5">
+                  Attached Evidence ({Array.isArray(caseToPreview.evidence) ? caseToPreview.evidence.length : (caseToPreview.evidence_count || 0)})
+                </label>
+                {Array.isArray(caseToPreview.evidence) && caseToPreview.evidence.length > 0 ? (
+                  <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                    {caseToPreview.evidence.map((ev: any, idx: number) => (
+                      <div key={ev.id || idx} className="flex items-center justify-between p-2.5 bg-slate-50 border border-[#e5e5e5] rounded text-xs">
+                        <div className="flex items-center gap-2 truncate">
+                          <FileText className="h-4 w-4 text-[#CC2200] shrink-0" />
+                          <span className="font-semibold text-slate-800 truncate max-w-[220px]">
+                            {ev.original_name || ev.file_name || `Evidence Item #${ev.id || idx + 1}`}
+                          </span>
+                          {ev.file_size && (
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              ({(ev.file_size / (1024 * 1024)).toFixed(2)} MB)
+                            </span>
+                          )}
+                        </div>
+                        {ev.sha256_hash && (
+                          <span className="text-[9px] font-mono text-slate-400 hidden sm:inline" title={ev.sha256_hash}>
+                            SHA: {ev.sha256_hash.substring(0, 10)}...
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-[#0a0a0a]/40 italic p-3 bg-slate-50 rounded border border-[#e5e5e5]">
+                    {previewLoading ? "Loading attached evidence files..." : "No evidence files attached to this case."}
                   </p>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/50 mb-1">
-                    Evidences Uploaded
-                  </label>
-                  <p className="font-semibold text-xs text-[#0a0a0a]/90">
-                    {caseToPreview.evidence_count !== undefined
-                      ? `${caseToPreview.evidence_count} ${caseToPreview.evidence_count === 1 ? "evidence file" : "evidence files"}`
-                      : (caseToPreview.evidence?.length !== undefined
-                        ? `${caseToPreview.evidence.length} ${caseToPreview.evidence.length === 1 ? "evidence file" : "evidence files"}`
-                        : "0 evidence files")}
-                  </p>
-                </div>
+                )}
               </div>
 
               {/* Case Notes */}
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-[#0a0a0a]/50 mb-1">
-                  Case Notes
+                  Case Notes ({Array.isArray(caseToPreview.notes) ? caseToPreview.notes.length : 0})
                 </label>
-                <div className="bg-slate-50 p-3.5 rounded-lg border border-[#e5e5e5] text-xs text-[#0a0a0a]/80 max-h-40 overflow-y-auto space-y-2">
+                <div className="bg-slate-50 p-3 rounded-lg border border-[#e5e5e5] text-xs text-[#0a0a0a]/80 max-h-28 overflow-y-auto space-y-2">
                   {Array.isArray(caseToPreview.notes) && caseToPreview.notes.length > 0 ? (
                     caseToPreview.notes.map((n: any, idx: number) => (
                       <div key={n.id || idx} className="border-b border-[#e5e5e5] last:border-b-0 pb-1.5 last:pb-0">
                         <p className="whitespace-pre-wrap">{n.note || n}</p>
+                        {n.created_at && (
+                          <span className="text-[9px] text-slate-400 block mt-0.5">
+                            {new Date(n.created_at).toLocaleString("en-GB")}
+                          </span>
+                        )}
                       </div>
                     ))
                   ) : typeof caseToPreview.notes === "string" && caseToPreview.notes.trim() ? (
@@ -5286,31 +5473,71 @@ function UserDashboardContent() {
             </div>
 
             {/* Modal Footer */}
-            <div className="flex items-center justify-end gap-3 pt-4 border-t border-[#e5e5e5]">
+            <div className="flex items-center justify-between gap-3 pt-4 border-t border-[#e5e5e5]">
               <button
                 type="button"
-                onClick={() => {
-                  setViewCaseModalOpen(false);
-                  setCaseToPreview(null);
-                }}
+                onClick={closeViewCaseModal}
                 disabled={claimingCaseId !== null}
                 className="px-4 py-2 border border-[#e5e5e5] rounded-md text-xs font-bold text-[#0a0a0a]/70 hover:bg-slate-50 transition-colors cursor-pointer"
               >
-                Cancel
+                Close
               </button>
-              <button
-                type="button"
-                onClick={handleClaimFromModal}
-                disabled={claimingCaseId !== null}
-                className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#CC2200] hover:bg-[#a81c00] text-white rounded-md text-xs font-bold transition-colors shadow-xs cursor-pointer disabled:opacity-50"
-              >
-                {claimingCaseId !== null ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <ShieldCheck className="h-3.5 w-3.5" />
-                )}
-                {claimingCaseId !== null ? "Claiming..." : "Claim Case"}
-              </button>
+
+              <div className="flex items-center gap-2">
+                {(() => {
+                  const currentUserIdStr = session?.user?.id ? String(session.user.id) : null;
+                  const isModalAssignedToMe = Boolean(
+                    caseToPreview.is_assigned_to_me ||
+                    (currentUserIdStr && (
+                      String(caseToPreview.assigned_expert_id) === currentUserIdStr ||
+                      String(caseToPreview.assigned_investigator_id) === currentUserIdStr
+                    ))
+                  );
+                  const isModalUnassigned = Boolean(!caseToPreview.assigned_expert_id && !caseToPreview.assigned_investigator_id);
+
+                  if (isModalUnassigned) {
+                    return (
+                      <button
+                        type="button"
+                        onClick={handleClaimFromModal}
+                        disabled={claimingCaseId !== null}
+                        className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#CC2200] hover:bg-[#a81c00] text-white rounded-md text-xs font-bold transition-colors shadow-xs cursor-pointer disabled:opacity-50"
+                      >
+                        {claimingCaseId !== null ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <ShieldCheck className="h-3.5 w-3.5" />
+                        )}
+                        {claimingCaseId !== null ? "Claiming..." : "Claim Case"}
+                      </button>
+                    );
+                  }
+
+                  if (isModalAssignedToMe) {
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          closeViewCaseModal();
+                          setSelectedCaseId(caseToPreview.id);
+                          fetchCaseDetail(caseToPreview.id);
+                          fetchScanResult(caseToPreview.id);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#CC2200] hover:bg-[#a81c00] text-white rounded-md text-xs font-bold transition-colors shadow-xs cursor-pointer"
+                      >
+                        <FolderSearch className="h-3.5 w-3.5" />
+                        Open Workspace
+                      </button>
+                    );
+                  }
+
+                  return (
+                    <span className="text-xs text-slate-500 font-medium italic">
+                      Assigned to {caseToPreview.assigned_investigator_name || caseToPreview.assigned_expert_name || "another investigator"}
+                    </span>
+                  );
+                })()}
+              </div>
             </div>
           </div>
         </div>

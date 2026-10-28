@@ -1,5 +1,6 @@
 import os
 import logging
+from typing import Optional
 from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
 from pydantic import EmailStr
 from dotenv import load_dotenv
@@ -16,14 +17,14 @@ if os.path.exists(env_file):
 load_dotenv()
 
 def get_mail_conf() -> ConnectionConfig:
-    port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_tls = os.getenv("SMTP_TLS", "True").lower() == "true"
-    smtp_ssl = os.getenv("SMTP_SSL", "False").lower() == "true"
+    port = int(os.getenv("SMTP_PORT", "465"))
+    smtp_tls = os.getenv("SMTP_TLS", "False").lower() == "true"
+    smtp_ssl = os.getenv("SMTP_SSL", "True").lower() == "true"
 
-    if port == 465 and not smtp_ssl:
+    if port == 465:
         smtp_ssl = True
         smtp_tls = False
-    elif port == 587 and not smtp_tls:
+    elif port == 587:
         smtp_tls = True
         smtp_ssl = False
 
@@ -43,18 +44,33 @@ def get_mail_conf() -> ConnectionConfig:
         MAIL_SSL_TLS=smtp_ssl,
         USE_CREDENTIALS=bool(username),
         VALIDATE_CERTS=True,
-        TIMEOUT=15
+        TIMEOUT=30
     )
 
 def get_fastmail() -> FastMail:
     return FastMail(get_mail_conf())
 
 
-async def send_investigator_invitation_email(email: EmailStr, full_name: str, token: str, invitation_id: int):
+async def send_investigator_invitation_email(
+    email: EmailStr,
+    full_name: str,
+    token: str,
+    invitation_id: int,
+    frontend_url: Optional[str] = None
+):
     """
     Sends an invitation email to a new investigator and logs it in the database.
     """
-    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
+    if not frontend_url:
+        if os.getenv("X_ZOHO_CATALYST_LISTEN_PORT"):
+            frontend_url = "https://aurora.onslate.in"
+        else:
+            frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
+
+    if os.getenv("X_ZOHO_CATALYST_LISTEN_PORT") and ("localhost" in frontend_url or "127.0.0.1" in frontend_url):
+        frontend_url = "https://aurora.onslate.in"
+
+    frontend_url = frontend_url.rstrip("/")
     registration_link = f"{frontend_url}/register?token={token}"
     
     html_content = f"""

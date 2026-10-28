@@ -54,19 +54,36 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
   callbacks: {
     async redirect({ url, baseUrl }) {
+      // In development or when baseUrl is not configured locally, fallback to local origin
+      let effectiveBase = baseUrl;
+      if (
+        (process.env.NODE_ENV === "development" || process.env.NODE_ENV !== "production") &&
+        !baseUrl.includes("localhost") &&
+        !baseUrl.includes("127.0.0.1")
+      ) {
+        effectiveBase = "http://localhost:3000";
+      }
+
       if (url.startsWith("/")) {
-        return `${baseUrl}${url}`;
+        return `${effectiveBase}${url}`;
       }
       if (url.includes("dip-frontend-npczgoxg.onslate.in")) {
         return url.replace("https://dip-frontend-npczgoxg.onslate.in", "https://aurora.onslate.in");
       }
       try {
         const parsed = new URL(url);
-        if (parsed.origin === baseUrl || parsed.hostname.endsWith(".onslate.in")) {
+        if (
+          parsed.origin === effectiveBase ||
+          parsed.origin === baseUrl ||
+          parsed.hostname === "localhost" ||
+          parsed.hostname === "127.0.0.1" ||
+          parsed.hostname.endsWith(".onslate.in") ||
+          parsed.hostname.endsWith(".onslate.com")
+        ) {
           return url;
         }
       } catch {}
-      return baseUrl;
+      return effectiveBase;
     },
     async jwt({ token, user }) {
       if (user) {

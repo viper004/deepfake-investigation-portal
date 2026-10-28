@@ -330,6 +330,20 @@ def seed_roles_and_users():
                 existing_role.description = r_data["description"]
         db.commit()
 
+        # Ensure superuser exists
+        superuser = db.query(User).filter(User.email == "superuser@example.com").first()
+        if not superuser:
+            superuser = User(
+                full_name="System Admin",
+                email="superuser@example.com",
+                password=get_password_hash("password"),
+                role_id=1,
+                status="ACTIVE",
+                email_verified=True
+            )
+            db.add(superuser)
+            db.commit()
+
         # Seed Users if table is empty or only has the superuser
         total_users = db.query(User).count()
         if total_users <= 1:

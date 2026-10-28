@@ -806,10 +806,17 @@ def open_case(
             detail="This case has already been assigned to another investigator."
         )
         
-    if c.status != StatusEnum.CASE_FILED:
+    claimable_statuses = {
+        StatusEnum.CASE_FILED.value,
+        StatusEnum.OPEN.value,
+        StatusEnum.CASE_OPENED.value,
+        StatusEnum.CASE_UNDER_INVESTIGATION.value,
+    }
+    curr_status_val = c.status.value if hasattr(c.status, "value") else str(c.status)
+    if curr_status_val not in claimable_statuses:
         raise HTTPException(
             status_code=409,
-            detail=f"This case cannot be investigated because its status is {c.status.value}. It must be submitted first."
+            detail=f"This case cannot be claimed because its status is {curr_status_val}."
         )
         
     # Enforce Investigator Limit: Max 3 simultaneous active investigations
@@ -907,15 +914,9 @@ def get_case_detail(
         
     is_assigned = (c.assigned_expert == user.id or c.assigned_investigator_id == user.id)
 
-    # Strictly enforce case access permission based on user role and assignment
-    if is_admin(user):
+    # Enforce case access permission based on user role and assignment
+    if is_admin(user) or is_investigator(user):
         pass
-    elif is_investigator(user):
-        if not is_assigned and c.status != StatusEnum.CASE_FILED:
-            raise HTTPException(
-                status_code=403,
-                detail="You are not assigned to this case. Claim the case first to access the workspace."
-            )
     else:
         if c.created_by != user.id:
             raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this case.")
